@@ -58,7 +58,7 @@ def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
     assert messages[-2]["role"] == "user"
     runtime_content = messages[-2]["content"]
     assert isinstance(runtime_content, str)
-    assert ContextBuilder._RUNTIME_CONTEXT_TAG in runtime_content
+    assert "[-- BEGIN UNTRUSTED CONTENT: runtime_metadata --]" in runtime_content
     assert "Current Time:" in runtime_content
     assert "Channel: cli" in runtime_content
     assert "Chat ID: direct" in runtime_content

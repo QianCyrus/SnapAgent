@@ -98,7 +98,7 @@ async def test_different_queries_both_execute():
 
 @pytest.mark.asyncio
 async def test_search_loop_injects_nudge():
-    """After 3 consecutive web_search iterations, a nudge message is injected."""
+    """After 2 consecutive web_search iterations, a nudge message is injected."""
     tool = _CountingSearchTool()
     registry = ToolRegistry()
     registry.register(tool)
@@ -117,22 +117,16 @@ async def test_search_loop_injects_nudge():
                 ToolCallRequest(id="t2", name="web_search", arguments={"query": "q2"}),
             ],
         ),
-        LLMResponse(
-            content="s3",
-            tool_calls=[
-                ToolCallRequest(id="t3", name="web_search", arguments={"query": "q3"}),
-            ],
-        ),
         LLMResponse(content="Final answer.", tool_calls=[]),
     ])
 
     orch = ConversationOrchestrator(provider=provider, tools=gateway)
     result = await orch.run_agent_loop([{"role": "user", "content": "test"}])
 
-    # Nudge should have been injected into messages
+    # Nudge should have been injected into messages after 2 consecutive searches
     nudge_messages = [
         m for m in result.messages
-        if m.get("role") == "user" and "Stop searching" in m.get("content", "")
+        if m.get("role") == "user" and "STOP SEARCHING" in m.get("content", "")
     ]
     assert len(nudge_messages) >= 1
     assert "Final answer." in result.final_text
