@@ -5,7 +5,7 @@ import json
 import os
 import re
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse, urlunparse
 
 import httpx
 
@@ -58,6 +58,15 @@ class WebSearchTool(Tool):
                 "minimum": 1,
                 "maximum": 10,
             },
+            "freshness": {
+                "type": "string",
+                "description": "Optional freshness filter: day/week/month/year",
+                "enum": ["day", "week", "month", "year"],
+            },
+            "language": {
+                "type": "string",
+                "description": "Optional language hint (e.g. en, zh-CN)",
+            },
         },
         "required": ["query"],
     }
@@ -71,55 +80,229 @@ class WebSearchTool(Tool):
         """Resolve API key at call time so env/config changes are picked up."""
         return self._init_api_key or os.environ.get("BRAVE_API_KEY", "")
 
-    async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
+    async def execute(
+        self,
+        query: str,
+        count: int | None = None,
+        freshness: str | None = None,
+        language: str | None = None,
+        **kwargs: Any,
+    ) -> str:
+        # Backward-compatible handling for camelCase arguments from tool calls.
+        if "freshness" in kwargs and freshness is None:
+            freshness = kwargs["freshness"]
+        if "language" in kwargs and language is None:
+            language = kwargs["language"]
+
         n = min(max(count or self.max_results, 1), 10)
+        fetch_n = min(10, max(n * 2, n))
+        query_variants = self._query_variants(query)
+        language = (language or "").strip() or self._default_language(query)
         brave_error: str | None = None
+        merged: list[dict[str, Any]] = []
 
         if self.api_key:
             try:
-                return await self._search_brave(query, n)
+                for q in query_variants:
+                    brave_results = await self._search_brave(
+                        q, fetch_n, freshness=freshness, language=language
+                    )
+                    merged = self._merge_and_rank(query, merged + brave_results)
+                    if len(merged) >= n:
+                        break
             except Exception as e:
                 brave_error = str(e)
 
-        try:
-            fallback = await self._search_duckduckgo(query, n)
-            if brave_error:
-                return (
-                    f"[Web search fallback] Brave Search unavailable: {brave_error}\n\n{fallback}"
-                )
-            return fallback
-        except Exception as e:
-            if brave_error:
-                return f"Error: Web search failed (Brave + fallback): {e}"
-            return (
-                "Error: Web search fallback failed and Brave Search API key is not configured. "
-                "Set tools.web.search.apiKey in ~/.snapagent/config.json (or export BRAVE_API_KEY)."
-            )
+        fallback_error: str | None = None
+        if len(merged) < n:
+            try:
+                ddg_results: list[dict[str, Any]] = []
+                for q in query_variants:
+                    ddg_results.extend(await self._search_duckduckgo(q, fetch_n, language=language))
+                    if len(ddg_results) >= n:
+                        break
+                merged = self._merge_and_rank(query, merged + ddg_results)
+            except Exception as e:
+                fallback_error = str(e)
 
-    async def _search_brave(self, query: str, count: int) -> str:
+        if merged:
+            result = self._format_search_results(query, merged, n)
+            if brave_error and self.api_key:
+                return f"[Web search degraded] Brave Search unavailable: {brave_error}\n\n{result}"
+            return result
+
+        if brave_error and fallback_error:
+            return f"Error: Web search failed (Brave + fallback): {fallback_error}"
+        return (
+            "Error: Web search fallback failed and Brave Search API key is not configured. "
+            "Set tools.web.search.apiKey in ~/.snapagent/config.json (or export BRAVE_API_KEY)."
+        )
+
+    async def _search_brave(
+        self,
+        query: str,
+        count: int,
+        *,
+        freshness: str | None = None,
+        language: str | None = None,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"q": query, "count": count}
+        if freshness in {"day", "week", "month", "year"}:
+            params["freshness"] = self._map_freshness(freshness)
+        if language:
+            params["search_lang"] = language
+
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 "https://api.search.brave.com/res/v1/web/search",
-                params={"q": query, "count": count},
+                params=params,
                 headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
                 timeout=10.0,
             )
             r.raise_for_status()
 
-        results = r.json().get("web", {}).get("results", [])
-        return self._format_search_results(query, results, count)
+        raw = r.json().get("web", {}).get("results", [])
+        results: list[dict[str, Any]] = []
+        for item in raw:
+            url = self._normalize_result_url(item.get("url", ""))
+            if not url:
+                continue
+            results.append(
+                {
+                    "title": _normalize(_strip_tags(str(item.get("title", "")))),
+                    "url": url,
+                    "description": _normalize(_strip_tags(str(item.get("description", "")))),
+                    "_source": "brave",
+                }
+            )
+        return results
 
-    async def _search_duckduckgo(self, query: str, count: int) -> str:
+    async def _search_duckduckgo(
+        self, query: str, count: int, *, language: str | None = None
+    ) -> list[dict[str, Any]]:
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept-Language": self._accept_language(language),
+        }
+
+        # Extensible backend pipeline: append new sources here without changing caller logic.
+        backends = (
+            self._search_duckduckgo_html_backend,
+            self._search_duckduckgo_lite_backend,
+        )
+        for backend in backends:
+            try:
+                results = await backend(query, count, headers)
+            except Exception:
+                continue
+            if results:
+                return results
+        return []
+
+    async def _search_duckduckgo_html_backend(
+        self, query: str, count: int, headers: dict[str, str]
+    ) -> list[dict[str, Any]]:
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 "https://duckduckgo.com/html/",
                 params={"q": query},
-                headers={"User-Agent": USER_AGENT},
+                headers=headers,
                 timeout=15.0,
             )
             r.raise_for_status()
+            return self._parse_duckduckgo_html(r.text, count)
 
-        html_body = r.text
+    async def _search_duckduckgo_lite_backend(
+        self, query: str, count: int, headers: dict[str, str]
+    ) -> list[dict[str, Any]]:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                "https://lite.duckduckgo.com/lite/",
+                params={"q": query},
+                headers=headers,
+                timeout=15.0,
+            )
+            r.raise_for_status()
+            return self._parse_duckduckgo_lite(r.text, count)
+
+    @staticmethod
+    def _unwrap_duckduckgo_url(url: str) -> str:
+        parsed = urlparse(url)
+        if "duckduckgo.com" not in parsed.netloc or not parsed.path.startswith("/l/"):
+            return url
+        target = parse_qs(parsed.query).get("uddg", [])
+        return unquote(target[0]) if target else url
+
+    @staticmethod
+    def _normalize_result_url(url: str) -> str:
+        try:
+            parsed = urlparse(url.strip())
+        except Exception:
+            return ""
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return ""
+        path = parsed.path or "/"
+        path = re.sub(r"/{2,}", "/", path)
+        query_pairs = []
+        if parsed.query:
+            for part in parsed.query.split("&"):
+                if not part:
+                    continue
+                key = part.split("=", 1)[0].lower()
+                if key.startswith("utm_") or key in {"fbclid", "gclid", "ref", "source"}:
+                    continue
+                query_pairs.append(part)
+        query = "&".join(sorted(query_pairs))
+        return urlunparse((parsed.scheme, parsed.netloc.lower(), path, "", query, ""))
+
+    @staticmethod
+    def _map_freshness(value: str) -> str:
+        mapping = {
+            "day": "pd",
+            "week": "pw",
+            "month": "pm",
+            "year": "py",
+        }
+        return mapping.get(value, "")
+
+    @staticmethod
+    def _default_language(query: str) -> str:
+        if re.search(r"[\u4e00-\u9fff]", query):
+            return "zh-hans"
+        return "en"
+
+    @staticmethod
+    def _accept_language(language: str | None) -> str:
+        code = (language or "").strip().lower()
+        if code.startswith("zh"):
+            return "zh-CN,zh;q=0.9,en;q=0.7"
+        return "en-US,en;q=0.9"
+
+    @staticmethod
+    def _query_variants(query: str) -> list[str]:
+        base = " ".join(query.strip().split())
+        if not base:
+            return []
+        variants = [base]
+        # Relax quoted queries if strict matching returns sparse results.
+        if (base.startswith('"') and base.endswith('"')) or (base.startswith("'") and base.endswith("'")):
+            relaxed = base[1:-1].strip()
+            if relaxed:
+                variants.append(relaxed)
+        if re.search(r"[\u4e00-\u9fff]", base):
+            no_space = base.replace(" ", "")
+            if no_space and no_space != base:
+                variants.append(no_space)
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for q in variants:
+            if q.lower() not in seen:
+                seen.add(q.lower())
+                deduped.append(q)
+        return deduped
+
+    @staticmethod
+    def _parse_duckduckgo_html(html_body: str, count: int) -> list[dict[str, Any]]:
         links = re.findall(
             r"<a[^>]*class=['\"][^'\"]*result__a[^'\"]*['\"][^>]*href=['\"]([^'\"]+)['\"][^>]*>(.*?)</a>",
             html_body,
@@ -130,23 +313,92 @@ class WebSearchTool(Tool):
             html_body,
             flags=re.I | re.S,
         )
-
-        results: list[dict[str, str]] = []
+        results: list[dict[str, Any]] = []
         for i, (href, title_html) in enumerate(links[:count]):
-            title = _strip_tags(title_html)
-            url = self._unwrap_duckduckgo_url(href)
+            url = WebSearchTool._normalize_result_url(WebSearchTool._unwrap_duckduckgo_url(href))
+            if not url:
+                continue
             desc = _strip_tags(snippets[i]) if i < len(snippets) else ""
-            results.append({"title": title, "url": url, "description": desc})
-
-        return self._format_search_results(query, results, count)
+            results.append(
+                {
+                    "title": _normalize(_strip_tags(title_html)),
+                    "url": url,
+                    "description": _normalize(desc),
+                    "_source": "duckduckgo",
+                }
+            )
+        return results
 
     @staticmethod
-    def _unwrap_duckduckgo_url(url: str) -> str:
-        parsed = urlparse(url)
-        if "duckduckgo.com" not in parsed.netloc or not parsed.path.startswith("/l/"):
-            return url
-        target = parse_qs(parsed.query).get("uddg", [])
-        return unquote(target[0]) if target else url
+    def _parse_duckduckgo_lite(html_body: str, count: int) -> list[dict[str, Any]]:
+        pattern = re.compile(
+            r"<a[^>]*href=['\"]([^'\"]+)['\"][^>]*>(.*?)</a>(?:[\s\S]{0,400}?<td[^>]*>(.*?)</td>)?",
+            flags=re.I | re.S,
+        )
+        results: list[dict[str, Any]] = []
+        for href, title_html, snippet_html in pattern.findall(html_body):
+            if len(results) >= count:
+                break
+            url = WebSearchTool._normalize_result_url(WebSearchTool._unwrap_duckduckgo_url(href))
+            if not url:
+                continue
+            title = _normalize(_strip_tags(title_html))
+            if not title:
+                continue
+            results.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "description": _normalize(_strip_tags(snippet_html or "")),
+                    "_source": "duckduckgo-lite",
+                }
+            )
+        return results
+
+    @staticmethod
+    def _merge_and_rank(query: str, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        query_terms = [t for t in re.findall(r"\w+", query.lower()) if len(t) >= 2]
+        query_text = query.lower().strip()
+
+        dedup: dict[str, dict[str, Any]] = {}
+        for idx, item in enumerate(results):
+            url = WebSearchTool._normalize_result_url(str(item.get("url", "")))
+            if not url:
+                continue
+            title = str(item.get("title", "")).strip()
+            desc = str(item.get("description", "")).strip()
+            blob = f"{title} {desc} {url}".lower()
+            score = 0.0
+            if query_text and query_text in blob:
+                score += 4.0
+            for term in query_terms:
+                if term in title.lower():
+                    score += 1.8
+                elif term in desc.lower():
+                    score += 0.9
+                elif term in url.lower():
+                    score += 0.6
+            if title:
+                score += 0.3
+            if desc:
+                score += 0.3
+            score -= idx * 0.02  # Keep early result order as soft tie-breaker.
+
+            normalized = {
+                "title": title or url,
+                "url": url,
+                "description": desc,
+                "_score": score,
+                "_source": item.get("_source", "unknown"),
+            }
+            prev = dedup.get(url)
+            if prev is None or normalized["_score"] > prev["_score"]:
+                dedup[url] = normalized
+
+        ranked = sorted(dedup.values(), key=lambda x: x.get("_score", 0.0), reverse=True)
+        for item in ranked:
+            item.pop("_score", None)
+        return ranked
 
     @staticmethod
     def _format_search_results(query: str, results: list[dict[str, Any]], count: int) -> str:

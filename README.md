@@ -257,6 +257,15 @@ MCP supports both `stdio` (local process) and `HTTP` (remote endpoint) transport
 
 Modes: `off` / `balanced` / `aggressive`
 
+### Web Search Progress
+
+- **V0** (baseline): single-source query (Brave or DuckDuckGo HTML), basic parsing/formatting.
+- **V0.1** (current): query variants, Brave + fallback fusion, DuckDuckGo html/lite backend pipeline, URL normalization + dedupe, lightweight relevance reranking, optional `freshness` and `language` hints.
+
+Extensibility note:
+- Search fallbacks now use a backend pipeline pattern in `snapagent/agent/tools/web.py`.
+- To add a new source, implement one backend method and append it to the backend list without changing `execute()` orchestration.
+
 ---
 
 ## CLI Reference
