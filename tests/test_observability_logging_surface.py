@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import queue
+import threading
+import time
 
 from typer.testing import CliRunner
 
@@ -132,3 +135,42 @@ def test_logs_command_supports_follow_mode(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert '"name": "outbound.published"' in result.stdout
+
+
+def test_follow_continues_after_rotation(tmp_path) -> None:
+    sink = JsonlLoggingSink(
+        tmp_path / "logs" / "diagnostic.jsonl",
+        rotate_bytes=450,
+        max_backups=1,
+    )
+    out: queue.Queue[dict] = queue.Queue()
+
+    def _consume_two() -> None:
+        gen = sink.follow(poll_interval=0.02)
+        out.put(next(gen))
+        out.put(next(gen))
+
+    thread = threading.Thread(target=_consume_two, daemon=True)
+    thread.start()
+    time.sleep(0.1)
+
+    asyncio.run(sink.emit(DiagnosticEvent(name="first", component="test")))
+
+    first = out.get(timeout=1.0)
+    assert first["name"] == "first"
+
+    # Force rotation with larger payloads, then emit a marker event.
+    for i in range(10):
+        asyncio.run(
+            sink.emit(
+                DiagnosticEvent(
+                    name=f"bulk-{i}",
+                    component="test",
+                    attrs={"blob": "x" * 120},
+                )
+            )
+        )
+    asyncio.run(sink.emit(DiagnosticEvent(name="after-rotate", component="test")))
+
+    second = out.get(timeout=2.0)
+    assert second["name"] == "after-rotate"

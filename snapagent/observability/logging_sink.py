@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -131,15 +132,38 @@ class JsonlLoggingSink:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.touch(exist_ok=True)
 
-        with self.path.open(encoding="utf-8") as handle:
+        handle = self.path.open(encoding="utf-8")
+        try:
             handle.seek(0, 2)
             while True:
                 raw = handle.readline()
-                if not raw:
-                    time.sleep(poll_interval)
+                if raw:
+                    event = self._decode_line(raw)
+                    if event and self._matches(event, session_key=session_key, run_id=run_id):
+                        yield event
                     continue
-                event = self._decode_line(raw)
-                if not event:
-                    continue
-                if self._matches(event, session_key=session_key, run_id=run_id):
-                    yield event
+
+                time.sleep(poll_interval)
+
+                try:
+                    latest = self.path.stat()
+                except FileNotFoundError:
+                    # Rotation may temporarily remove current file.
+                    self.path.touch(exist_ok=True)
+                    latest = self.path.stat()
+
+                current = os.fstat(handle.fileno())
+
+                rotated = (current.st_ino, current.st_dev) != (latest.st_ino, latest.st_dev)
+                truncated = latest.st_size < handle.tell()
+
+                if rotated:
+                    handle.close()
+                    handle = self.path.open(encoding="utf-8")
+                    # Read from start of new active file to avoid dropping lines
+                    # written between rotation and reopen.
+                    handle.seek(0)
+                elif truncated:
+                    handle.seek(0)
+        finally:
+            handle.close()
