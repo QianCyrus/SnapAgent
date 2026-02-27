@@ -413,8 +413,10 @@ class AgentLoop:
                 channel=msg.channel,
                 chat_id=msg.chat_id,
                 content=(
-                    "\U0001f4cb Plan mode ON — I'll create a step-by-step plan before acting.\n"
-                    "Use /normal to switch back."
+                    "\U0001f4cb Plan mode ON\n"
+                    "I'll clarify requirements and present a plan for your approval "
+                    "before taking any action.\n"
+                    "Use /normal to switch back to direct execution."
                 ),
             )
         if cmd == "/normal":
@@ -436,8 +438,9 @@ class AgentLoop:
                 sender_id=msg.sender_id,
                 chat_id=msg.chat_id,
                 content=(
-                    "[Plan Mode] Generate a structured plan first, "
-                    "then execute it step by step.\n\n" + msg.content
+                    "[Plan Mode] First clarify the requirements, then present a structured plan "
+                    "and WAIT for the user to approve, modify, or reject it before executing.\n\n"
+                    + msg.content
                 ),
                 timestamp=msg.timestamp,
                 media=msg.media,
