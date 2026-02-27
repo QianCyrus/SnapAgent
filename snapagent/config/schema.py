@@ -224,6 +224,7 @@ class AgentDefaults(Base):
     temperature: float = 0.1
     max_tool_iterations: int = 40
     memory_window: int = 100
+    enable_event_handling: bool = False  # Enable async event injection for user interruption
 
 
 class AgentsConfig(Base):

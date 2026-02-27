@@ -38,6 +38,8 @@ class ConversationOrchestrator:
         initial_messages: list[dict],
         *,
         on_progress: Callable[..., Awaitable[None]] | None = None,
+        before_model: Callable[[list[dict]], Awaitable[None]] | None = None,
+        before_tool: Callable[[list[dict], int, list], Awaitable[bool]] | None = None,
     ) -> AgentResult:
         messages = list(initial_messages)
         iteration = 0
@@ -47,6 +49,8 @@ class ConversationOrchestrator:
 
         while iteration < self.max_iterations:
             iteration += 1
+            if before_model:
+                await before_model(messages)
             response = await self.provider.chat(messages=messages, tools=self.tools.definitions())
             usage = self._merge_usage(usage, response.usage)
 
@@ -79,7 +83,18 @@ class ConversationOrchestrator:
                     }
                 )
 
-                for tool_call in response.tool_calls:
+                for index, tool_call in enumerate(response.tool_calls):
+                    if before_tool and await before_tool(messages, index, response.tool_calls):
+                        for cancelled in response.tool_calls[index:]:
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": cancelled.id,
+                                    "name": cancelled.name,
+                                    "content": "CANCELLED: User interrupted",
+                                }
+                            )
+                        break
                     if isinstance(tool_call.arguments, dict):
                         args = tool_call.arguments
                     elif isinstance(tool_call.arguments, str):
