@@ -1282,14 +1282,77 @@ def logs_command(
 # ============================================================================
 
 
+def _print_health_snapshot(snapshot: dict, *, deep: bool) -> None:
+    """Render a health snapshot as a rich table."""
+    header = (
+        f"Health: liveness={snapshot['liveness']} readiness={snapshot['readiness']} "
+        f"degraded={snapshot['degraded']}"
+    )
+    console.print(f"\n[bold]{header}[/bold]")
+
+    table = Table(title="Health Evidence")
+    table.add_column("Component", style="cyan")
+    table.add_column("Status")
+    table.add_column("Summary")
+    if deep:
+        table.add_column("Details", overflow="fold")
+
+    status_style = {
+        "ok": "[green]ok[/green]",
+        "degraded": "[yellow]degraded[/yellow]",
+        "failed": "[red]failed[/red]",
+        "unknown": "[dim]unknown[/dim]",
+    }
+    for item in snapshot["evidence"]:
+        row = [
+            item["component"],
+            status_style.get(item["status"], item["status"]),
+            item["summary"],
+        ]
+        if deep:
+            row.append(json.dumps(item.get("details", {}), ensure_ascii=False))
+        table.add_row(*row)
+
+    console.print(table)
+
+
 @app.command()
-def status():
+def health(
+    deep: bool = typer.Option(False, "--deep", help="Include component-level evidence details"),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON"),
+):
+    """Show health snapshot for observability checks."""
+    from snapagent.config.loader import get_config_path, load_config
+    from snapagent.observability.health import collect_health_snapshot
+
+    config_path = get_config_path()
+    config = load_config()
+    snapshot = collect_health_snapshot(config=config, config_path=config_path).to_dict(deep=deep)
+
+    if json_output:
+        typer.echo(json.dumps(snapshot, ensure_ascii=False))
+        return
+
+    _print_health_snapshot(snapshot, deep=deep)
+
+
+@app.command()
+def status(
+    deep: bool = typer.Option(False, "--deep", help="Include detailed health evidence"),
+    json_output: bool = typer.Option(False, "--json", help="Output machine-readable JSON"),
+):
     """Show SnapAgent status."""
     from snapagent.config.loader import get_config_path, load_config
+    from snapagent.observability.health import collect_health_snapshot
 
     config_path = get_config_path()
     config = load_config()
     workspace = config.workspace_path
+    health_snapshot = collect_health_snapshot(config=config, config_path=config_path).to_dict(deep=deep)
+
+    if json_output:
+        typer.echo(json.dumps(health_snapshot, ensure_ascii=False))
+        return
 
     console.print(f"{__logo__} {__app_name__} Status\n")
 
@@ -1328,6 +1391,9 @@ def status():
                 console.print(
                     f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}"
                 )
+
+    if deep:
+        _print_health_snapshot(health_snapshot, deep=True)
 
 
 @app.command("migrate-config")
