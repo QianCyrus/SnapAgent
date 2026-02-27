@@ -13,6 +13,8 @@ A lightweight personal AI assistant framework built on Python.
 - **`/plan` command**: new slash command that triggers structured task planning before execution. The agent generates a TODO-style checklist, then executes step by step. Plan detection formats output with clipboard emoji in progress messages.
 - **Plan skill** (`always: true`): teaches the agent to automatically plan for complex multi-step tasks (3+ steps, research, comparison, synthesis) even without `/plan`.
 - New modules: `snapagent/orchestrator/dedup.py`, `snapagent/skills/plan/SKILL.md`.
+- Register `/plan` in Telegram bot command menu via `set_my_commands`.
+- Add `.gitignore` rules for user data (`sessions/`, `memory/`, `*.jsonl`).
 - 20 new tests (unit + integration) covering dedup, loop detection, plan command, and plan detection.
 
 ### v0.1 — Web Search Quality & Multi-Source Fusion
