@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE / Editor
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment / Secrets
+.env
+.env.*
+
+# Runtime artifacts
+.pytest_cache/
+.ruff_cache/
+botpy.log
+poetry.lock
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+.assets/

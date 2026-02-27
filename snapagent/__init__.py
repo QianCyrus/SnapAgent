@@ -1,0 +1,5 @@
+"""SnapAgent - A lightweight AI agent framework."""
+
+__version__ = "0.1.4.post2"
+__logo__ = "🐈"
+__app_name__ = "SnapAgent"
