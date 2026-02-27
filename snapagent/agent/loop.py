@@ -275,10 +275,11 @@ class AgentLoop:
                 continue
 
             raw = msg.content.strip()
-            lowered = raw.lower()
-            if lowered == "/stop":
+            parts = raw.split(maxsplit=1)
+            command = parts[0].lower() if parts else ""
+            if command == "/stop":
                 await self._handle_stop(msg)
-            elif lowered.startswith("/doctor"):
+            elif command == "/doctor":
                 await self._handle_doctor(msg)
             else:
                 if self.enable_event_handling and msg.session_key in self._processing_tasks:
@@ -312,7 +313,8 @@ class AgentLoop:
         session = self.sessions.get_or_create(key)
         text = msg.content.strip()
         lowered = text.lower()
-        action = lowered.split(maxsplit=2)[1] if len(lowered.split()) > 1 else "start"
+        parts = lowered.split(maxsplit=2)
+        action = parts[1] if len(parts) > 1 else "start"
 
         if action == "status":
             task = self._doctor_tasks.get(key)

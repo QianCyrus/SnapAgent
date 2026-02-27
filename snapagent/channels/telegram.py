@@ -117,6 +117,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("plan", "Switch to plan mode (think first, then act)"),
         BotCommand("normal", "Switch to normal mode (execute directly)"),
         BotCommand("stop", "Stop the current task"),
+        BotCommand("doctor", "Pause current session and run diagnostics"),
         BotCommand("help", "Show available commands"),
     ]
 

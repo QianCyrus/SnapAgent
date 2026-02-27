@@ -96,3 +96,23 @@ async def test_help_includes_doctor_commands():
     result = await loop._process_message(msg)
     assert result is not None
     assert "/doctor" in result.content
+
+
+@pytest.mark.asyncio
+async def test_run_does_not_route_doctor_typo_to_doctor_handler():
+    loop, bus, _session = _make_loop()
+    loop._handle_doctor = AsyncMock()
+    loop._dispatch = AsyncMock(return_value=None)
+
+    runner = asyncio.create_task(loop.run())
+    try:
+        await bus.publish_inbound(
+            InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/doctorr")
+        )
+        await asyncio.sleep(0.05)
+    finally:
+        loop.stop()
+        await asyncio.wait_for(runner, timeout=2.0)
+
+    loop._handle_doctor.assert_not_awaited()
+    assert loop._dispatch.await_count == 1
