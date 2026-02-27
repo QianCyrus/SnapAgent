@@ -411,7 +411,7 @@ class TelegramChannel(BaseChannel):
         await self._handle_message(
             sender_id=self._sender_id(update.effective_user),
             chat_id=chat_id,
-            content=update.message.text or "/doctor",
+            content=self._normalize_command_text(update.message.text) or "/doctor",
         )
 
     async def _forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -421,8 +421,23 @@ class TelegramChannel(BaseChannel):
         await self._handle_message(
             sender_id=self._sender_id(update.effective_user),
             chat_id=str(update.message.chat_id),
-            content=update.message.text,
+            content=self._normalize_command_text(update.message.text),
         )
+
+    @staticmethod
+    def _normalize_command_text(text: str | None) -> str:
+        """Normalize Telegram mention commands (e.g. /doctor@bot -> /doctor)."""
+        if not text:
+            return ""
+        parts = text.strip().split(maxsplit=1)
+        if not parts:
+            return ""
+        head = parts[0]
+        if head.startswith("/") and "@" in head:
+            head = head.split("@", 1)[0]
+        if len(parts) == 1:
+            return head
+        return f"{head} {parts[1]}"
 
     async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming messages (text, photos, voice, documents)."""
