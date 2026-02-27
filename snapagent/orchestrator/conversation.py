@@ -9,6 +9,7 @@ from typing import Awaitable, Callable
 from snapagent.adapters.provider import ProviderAdapter
 from snapagent.adapters.tools import ToolGateway
 from snapagent.core.types import AgentResult, ToolTrace
+from snapagent.orchestrator.dedup import ToolCallDedup
 
 # Friendly display labels for built-in tools: (emoji, label)
 _TOOL_DISPLAY: dict[str, tuple[str, str]] = {
@@ -22,6 +23,7 @@ _TOOL_DISPLAY: dict[str, tuple[str, str]] = {
     "message": ("\U0001f4ac", "Sending message"),
     "cron": ("\u23f0", "Scheduling"),
     "spawn": ("\U0001f504", "Spawning subtask"),
+    "rag_query": ("\U0001f9ea", "Fact-checking"),
 }
 
 
@@ -46,6 +48,7 @@ class ConversationOrchestrator:
         final_content: str | None = None
         tool_trace: list[ToolTrace] = []
         usage: dict[str, int] = {}
+        dedup = ToolCallDedup()
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -58,7 +61,11 @@ class ConversationOrchestrator:
                 if on_progress:
                     clean = self._strip_think(response.content)
                     if clean:
-                        await on_progress(clean)
+                        plan = self._extract_plan(clean)
+                        if plan:
+                            await on_progress(f"\U0001f4cb {plan}")
+                        else:
+                            await on_progress(clean)
                     await on_progress(
                         self._tool_hint(response.tool_calls, step=iteration), tool_hint=True
                     )
@@ -105,7 +112,21 @@ class ConversationOrchestrator:
                             args = {}
                     else:
                         args = {}
-                    result, trace = await self.tools.invoke(tool_call.name, args)
+
+                    dup = dedup.check(tool_call.name, args)
+                    if dup.is_duplicate:
+                        result = dup.cached_result or ""
+                        trace = ToolTrace(
+                            name=tool_call.name,
+                            arguments=args,
+                            result_preview="[cached]",
+                            ok=True,
+                        )
+                    else:
+                        result, trace = await self.tools.invoke(tool_call.name, args)
+                        dedup.store(tool_call.name, args, result)
+
+                    dedup.record_tool_name(tool_call.name)
                     tool_trace.append(trace)
                     messages.append(
                         {
@@ -115,6 +136,16 @@ class ConversationOrchestrator:
                             "content": result,
                         }
                     )
+
+                if dedup.search_loop_detected:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[System] You have called web_search multiple times in a row. "
+                            "Stop searching and use the results you already have. "
+                            "If you need more detail, use web_fetch to read specific pages."
+                        ),
+                    })
             else:
                 clean = self._strip_think(response.content) or ""
                 messages.append(
@@ -155,6 +186,16 @@ class ConversationOrchestrator:
         if not text:
             return None
         return re.sub(r"<think>[\s\S]*?</think>", "", text).strip() or None
+
+    _PLAN_RE = re.compile(r"\*\*Plan:\*\*\n((?:\d+\.\s*\[[ x]\].*\n?)+)", re.IGNORECASE)
+
+    @staticmethod
+    def _extract_plan(text: str | None) -> str | None:
+        """Extract a plan block from assistant text, if present."""
+        if not text:
+            return None
+        m = ConversationOrchestrator._PLAN_RE.search(text)
+        return m.group(0).strip() if m else None
 
     @staticmethod
     def _tool_hint(tool_calls: list, step: int = 0) -> str:

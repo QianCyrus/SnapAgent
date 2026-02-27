@@ -17,6 +17,7 @@ from snapagent.agent.subagent import SubagentManager
 from snapagent.agent.tools.cron import CronTool
 from snapagent.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from snapagent.agent.tools.message import MessageTool
+from snapagent.agent.tools.rag import RagQueryTool
 from snapagent.agent.tools.registry import ToolRegistry
 from snapagent.agent.tools.shell import ExecTool
 from snapagent.agent.tools.spawn import SpawnTool
@@ -139,6 +140,14 @@ class AgentLoop:
         )
         self.tools.register(WebSearchTool(api_key=self.brave_api_key))
         self.tools.register(WebFetchTool())
+        self.tools.register(
+            RagQueryTool(
+                provider=self.provider,
+                model=self.model,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+        )
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
@@ -432,7 +441,49 @@ class AgentLoop:
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="🐈 snapagent commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/help — Show available commands",
+                content="🐈 snapagent commands:\n/new — Start a new conversation\n/plan — Switch to plan mode (think first, then act)\n/normal — Switch to normal mode (execute directly)\n/stop — Stop the current task\n/help — Show available commands",
+            )
+
+        if cmd == "/plan":
+            session.metadata["plan_mode"] = True
+            self.sessions.save(session)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=(
+                    "\U0001f4cb Plan mode ON\n"
+                    "I'll clarify requirements and present a plan for your approval "
+                    "before taking any action.\n"
+                    "Use /normal to switch back to direct execution."
+                ),
+            )
+        if cmd == "/normal":
+            session.metadata.pop("plan_mode", None)
+            self.sessions.save(session)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=(
+                    "\u26a1 Normal mode — I'll execute tools directly.\n"
+                    "Use /plan to switch back."
+                ),
+            )
+
+        plan_mode = session.metadata.get("plan_mode", False)
+        if plan_mode:
+            msg = InboundMessage(
+                channel=msg.channel,
+                sender_id=msg.sender_id,
+                chat_id=msg.chat_id,
+                content=(
+                    "[Plan Mode] First clarify the requirements, then present a structured plan "
+                    "and WAIT for the user to approve, modify, or reject it before executing.\n\n"
+                    + msg.content
+                ),
+                timestamp=msg.timestamp,
+                media=msg.media,
+                metadata=msg.metadata,
+                session_key_override=msg.session_key_override,
             )
 
         unconsolidated = len(session.messages) - session.last_consolidated
@@ -481,9 +532,13 @@ class AgentLoop:
                 )
             )
 
+        on_progress = on_progress or _bus_progress
+        if plan_mode:
+            await on_progress("\U0001f4cb Plan mode — thinking before acting...")
+
         final_content, _, all_msgs = await self._run_agent_loop(
             initial_messages,
-            on_progress=on_progress or _bus_progress,
+            on_progress=on_progress,
             session_key=key,
         )
 

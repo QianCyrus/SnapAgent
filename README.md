@@ -2,6 +2,30 @@
 
 A lightweight personal AI assistant framework built on Python.
 
+## Changelog
+
+### v0.2 — Web Search Dedup, Plan Mode & Workflow Optimization
+
+- **Tool call dedup**: identical tool calls within a turn are cached and executed only once.
+- **Search loop detection**: 3+ consecutive `web_search` calls trigger a system nudge to stop and synthesize.
+- **`/plan` & `/normal` mode toggle**: `/plan` switches the session to plan mode — all subsequent messages auto-generate a structured TODO-style plan before execution. `/normal` switches back to direct execution. Mode persists across messages via `session.metadata`.
+- **Plan skill** (`always: true`): teaches the agent to auto-plan for complex tasks (3+ steps, research, comparison) even in normal mode.
+- **PLAN → SEARCH → FETCH → SYNTHESIZE** workflow guidance in system prompt; search results include `web_fetch` hint.
+- New modules: `orchestrator/dedup.py`, `skills/plan/SKILL.md`. Telegram registers `/plan` and `/normal` commands.
+
+### v0.1 — Web Search Quality & Multi-Source Fusion
+
+- Query variants for quoted and CJK queries to reduce missed results.
+- Brave + DuckDuckGo source fusion with extensible backend pipeline (`html` → `lite`).
+- URL normalization, tracking parameter removal, and cross-source dedup.
+- Lightweight relevance reranking against query terms.
+- Optional `freshness` and `language` hints for `web_search`.
+
+### v0 — Initial Release
+
+- Full agent pipeline: multi-turn conversation, tool calling, persistent memory, context compression, skill system, scheduled tasks, sub-task spawning.
+- 10 chat platforms, 17 LLM providers, MCP protocol support.
+
 ~4,000 lines of core agent code covering the full agent pipeline: multi-turn conversation, tool calling, persistent memory, context compression, skill system, scheduled tasks, sub-task spawning, and integration with 10 chat platforms and 17 LLM providers.
 
 ## Features
@@ -256,34 +280,6 @@ MCP supports both `stdio` (local process) and `HTTP` (remote endpoint) transport
 ```
 
 Modes: `off` / `balanced` / `aggressive`
-
-### Web Search Progress
-
-- **V0** (baseline): single-source query (Brave or DuckDuckGo HTML), basic parsing/formatting.
-- **V0.1** (current): query variants, Brave + fallback fusion, DuckDuckGo html/lite backend pipeline, URL normalization + dedupe, lightweight relevance reranking, optional `freshness` and `language` hints.
-
-### V0.1 Improvements
-
-- Retrieval quality: query variants are generated for strict/quoted and CJK spacing cases to reduce missed results.
-- Source fusion: results from Brave and fallback sources are merged instead of using only one source.
-- Fallback robustness: DuckDuckGo fallback uses a backend pipeline (`html` -> `lite`) and auto-tries the next backend on failure.
-- Result quality: URLs are normalized and tracking parameters are removed before dedupe.
-- Ranking: merged results are re-ranked with a lightweight relevance score against query terms.
-- API ergonomics: `web_search` now supports optional `freshness` (`day|week|month|year`) and `language` hints.
-
-Example (tool call args):
-```json
-{
-  "query": "openai responses api migration guide",
-  "count": 5,
-  "freshness": "week",
-  "language": "en"
-}
-```
-
-Extensibility note:
-- Search fallbacks now use a backend pipeline pattern in `snapagent/agent/tools/web.py`.
-- To add a new source, implement one backend method and append it to the backend list without changing `execute()` orchestration.
 
 ---
 

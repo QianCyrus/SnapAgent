@@ -114,6 +114,8 @@ class TelegramChannel(BaseChannel):
     BOT_COMMANDS = [
         BotCommand("start", "Start the bot"),
         BotCommand("new", "Start a new conversation"),
+        BotCommand("plan", "Switch to plan mode (think first, then act)"),
+        BotCommand("normal", "Switch to normal mode (execute directly)"),
         BotCommand("stop", "Stop the current task"),
         BotCommand("help", "Show available commands"),
     ]
@@ -155,6 +157,8 @@ class TelegramChannel(BaseChannel):
         # Add command handlers
         self._app.add_handler(CommandHandler("start", self._on_start))
         self._app.add_handler(CommandHandler("new", self._forward_command))
+        self._app.add_handler(CommandHandler("plan", self._forward_command))
+        self._app.add_handler(CommandHandler("normal", self._forward_command))
         self._app.add_handler(CommandHandler("stop", self._on_stop))
         self._app.add_handler(CommandHandler("help", self._on_help))
 
@@ -365,6 +369,8 @@ class TelegramChannel(BaseChannel):
         await update.message.reply_text(
             "🐈 snapagent commands:\n"
             "/new — Start a new conversation\n"
+            "/plan — Switch to plan mode (think first, then act)\n"
+            "/normal — Switch to normal mode (execute directly)\n"
             "/stop — Stop the current task\n"
             "/help — Show available commands"
         )

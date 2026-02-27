@@ -35,3 +35,9 @@ Thumbs.db
 
 # Project-specific
 .assets/
+
+# User data — sessions, memory, history (never commit)
+sessions/
+memory/MEMORY.md
+memory/HISTORY.md
+*.jsonl

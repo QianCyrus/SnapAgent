@@ -85,6 +85,12 @@ Your workspace is at: {workspace_path}
 - If a tool call fails, analyze the error before retrying with a different approach.
 - Ask for clarification when the request is ambiguous.
 
+## Web Research Strategy
+- Follow: PLAN what to search → SEARCH with a precise query → FETCH top result pages with web_fetch → SYNTHESIZE the answer.
+- Do not call web_search more than twice for one question. Refine the query if the first attempt is insufficient.
+- After receiving search results, use web_fetch on the most relevant URL(s) to get full page content before answering.
+- Never repeat an identical web_search query.
+
 Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel."""
 
     @staticmethod
