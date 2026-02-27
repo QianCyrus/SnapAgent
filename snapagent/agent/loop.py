@@ -250,6 +250,8 @@ class AgentLoop:
             except (asyncio.CancelledError, Exception):
                 pass
         sub_cancelled = await self.subagents.cancel_by_session(msg.session_key)
+        # Drain any progress messages still queued for this chat
+        self.bus.drain_progress(msg.chat_id)
         total = cancelled + sub_cancelled
         content = f"⏹ Stopped {total} task(s)." if total else "No active task to stop."
         await self.bus.publish_outbound(

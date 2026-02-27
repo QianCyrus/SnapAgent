@@ -33,6 +33,19 @@ class MessageBus:
         """Consume the next outbound message (blocks until available)."""
         return await self.outbound.get()
 
+    def drain_progress(self, chat_id: str) -> None:
+        """Remove queued progress messages for a specific chat."""
+        remaining: list[OutboundMessage] = []
+        while not self.outbound.empty():
+            try:
+                msg = self.outbound.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if not (msg.chat_id == chat_id and msg.metadata.get("_progress")):
+                remaining.append(msg)
+        for msg in remaining:
+            self.outbound.put_nowait(msg)
+
     @property
     def inbound_size(self) -> int:
         """Number of pending inbound messages."""

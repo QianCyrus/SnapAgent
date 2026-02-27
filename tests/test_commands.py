@@ -24,6 +24,7 @@ def mock_paths():
         patch("snapagent.config.loader.save_config") as mock_sc,
         patch("snapagent.config.loader.load_config"),
         patch("snapagent.utils.helpers.get_workspace_path") as mock_ws,
+        patch("snapagent.cli.commands._interactive_setup"),
     ):
         base_dir = Path("./test_onboard_data")
         if base_dir.exists():

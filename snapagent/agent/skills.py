@@ -174,7 +174,7 @@ class SkillsLoader:
         """Parse skill metadata JSON from frontmatter."""
         try:
             data = json.loads(raw)
-            return data.get("snapagent", data.get("openclaw", {})) if isinstance(data, dict) else {}
+            return data.get("snapagent", {}) if isinstance(data, dict) else {}
         except (json.JSONDecodeError, TypeError):
             return {}
 

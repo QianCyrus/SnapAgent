@@ -155,6 +155,7 @@ class TelegramChannel(BaseChannel):
         # Add command handlers
         self._app.add_handler(CommandHandler("start", self._on_start))
         self._app.add_handler(CommandHandler("new", self._forward_command))
+        self._app.add_handler(CommandHandler("stop", self._on_stop))
         self._app.add_handler(CommandHandler("help", self._on_help))
 
         # Add message handler for text, photos, voice, documents
@@ -373,6 +374,20 @@ class TelegramChannel(BaseChannel):
         """Build sender_id with username for allowlist matching."""
         sid = str(user.id)
         return f"{sid}|{user.username}" if user.username else sid
+
+    async def _on_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /stop command: clear progress message immediately, then forward to bus."""
+        if not update.message or not update.effective_user:
+            return
+        chat_id = str(update.message.chat_id)
+        # Immediately clear the progress indicator so the user sees it stop
+        await self._clear_progress(chat_id)
+        self._stop_typing(chat_id)
+        await self._handle_message(
+            sender_id=self._sender_id(update.effective_user),
+            chat_id=chat_id,
+            content="/stop",
+        )
 
     async def _forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Forward slash commands to the bus for unified handling in AgentLoop."""
