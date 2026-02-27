@@ -753,14 +753,48 @@ def agent(
         console.print(f"  [dim]↳ {content}[/dim]")
 
     if message:
-        # Single message mode — direct call, no bus needed
+        # Single message mode — route through bus to keep runtime semantics
+        # aligned with interactive/channel paths (including observability).
+        from snapagent.bus.events import InboundMessage
+
+        if ":" in session_id:
+            cli_channel, cli_chat_id = session_id.split(":", 1)
+        else:
+            cli_channel, cli_chat_id = "cli", session_id
+
         async def run_once():
-            with _thinking_ctx():
-                response = await agent_loop.process_direct(
-                    message, session_id, on_progress=_cli_progress
+            bus_task = asyncio.create_task(agent_loop.run())
+            response = ""
+            try:
+                await bus.publish_inbound(
+                    InboundMessage(
+                        channel=cli_channel,
+                        sender_id="user",
+                        chat_id=cli_chat_id,
+                        content=message,
+                    )
                 )
+
+                with _thinking_ctx():
+                    while True:
+                        msg = await bus.consume_outbound()
+                        if msg.metadata.get("_progress"):
+                            is_tool_hint = msg.metadata.get("_tool_hint", False)
+                            ch = agent_loop.channels_config
+                            if ch and is_tool_hint and not ch.send_tool_hints:
+                                continue
+                            if ch and not is_tool_hint and not ch.send_progress:
+                                continue
+                            console.print(f"  [dim]↳ {msg.content}[/dim]")
+                            continue
+                        response = msg.content or ""
+                        break
+            finally:
+                agent_loop.stop()
+                await asyncio.gather(bus_task, return_exceptions=True)
+                await agent_loop.close_mcp()
+
             _print_agent_response(response, render_markdown=markdown)
-            await agent_loop.close_mcp()
 
         asyncio.run(run_once())
     else:
