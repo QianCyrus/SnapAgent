@@ -262,6 +262,25 @@ Modes: `off` / `balanced` / `aggressive`
 - **V0** (baseline): single-source query (Brave or DuckDuckGo HTML), basic parsing/formatting.
 - **V0.1** (current): query variants, Brave + fallback fusion, DuckDuckGo html/lite backend pipeline, URL normalization + dedupe, lightweight relevance reranking, optional `freshness` and `language` hints.
 
+### V0.1 Improvements
+
+- Retrieval quality: query variants are generated for strict/quoted and CJK spacing cases to reduce missed results.
+- Source fusion: results from Brave and fallback sources are merged instead of using only one source.
+- Fallback robustness: DuckDuckGo fallback uses a backend pipeline (`html` -> `lite`) and auto-tries the next backend on failure.
+- Result quality: URLs are normalized and tracking parameters are removed before dedupe.
+- Ranking: merged results are re-ranked with a lightweight relevance score against query terms.
+- API ergonomics: `web_search` now supports optional `freshness` (`day|week|month|year`) and `language` hints.
+
+Example (tool call args):
+```json
+{
+  "query": "openai responses api migration guide",
+  "count": 5,
+  "freshness": "week",
+  "language": "en"
+}
+```
+
 Extensibility note:
 - Search fallbacks now use a backend pipeline pattern in `snapagent/agent/tools/web.py`.
 - To add a new source, implement one backend method and append it to the backend list without changing `execute()` orchestration.
