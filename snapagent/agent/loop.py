@@ -17,6 +17,7 @@ from snapagent.agent.subagent import SubagentManager
 from snapagent.agent.tools.cron import CronTool
 from snapagent.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from snapagent.agent.tools.message import MessageTool
+from snapagent.agent.tools.rag import RagQueryTool
 from snapagent.agent.tools.registry import ToolRegistry
 from snapagent.agent.tools.shell import ExecTool
 from snapagent.agent.tools.spawn import SpawnTool
@@ -136,6 +137,14 @@ class AgentLoop:
         )
         self.tools.register(WebSearchTool(api_key=self.brave_api_key))
         self.tools.register(WebFetchTool())
+        self.tools.register(
+            RagQueryTool(
+                provider=self.provider,
+                model=self.model,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+        )
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
@@ -394,7 +403,29 @@ class AgentLoop:
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="🐈 snapagent commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/help — Show available commands",
+                content="🐈 snapagent commands:\n/new — Start a new conversation\n/plan — Plan before acting on complex tasks\n/stop — Stop the current task\n/help — Show available commands",
+            )
+
+        if cmd.startswith("/plan"):
+            plan_content = msg.content.strip()[5:].strip()
+            if not plan_content:
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="Usage: /plan <your request>\nExample: /plan Research the latest AI safety frameworks",
+                )
+            msg = InboundMessage(
+                channel=msg.channel,
+                sender_id=msg.sender_id,
+                chat_id=msg.chat_id,
+                content=(
+                    "[Plan Mode] Generate a structured plan first, "
+                    "then execute it step by step.\n\n" + plan_content
+                ),
+                timestamp=msg.timestamp,
+                media=msg.media,
+                metadata=msg.metadata,
+                session_key_override=msg.session_key_override,
             )
 
         unconsolidated = len(session.messages) - session.last_consolidated

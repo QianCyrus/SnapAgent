@@ -410,6 +410,9 @@ class WebSearchTool(Tool):
             lines.append(f"{i}. {item.get('title', '')}\n   {item.get('url', '')}")
             if desc := item.get("description"):
                 lines.append(f"   {desc}")
+        lines.append(
+            "\nTip: Use web_fetch on the most relevant URL above to read the full page content."
+        )
         return "\n".join(lines)
 
 
