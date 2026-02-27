@@ -114,7 +114,8 @@ class TelegramChannel(BaseChannel):
     BOT_COMMANDS = [
         BotCommand("start", "Start the bot"),
         BotCommand("new", "Start a new conversation"),
-        BotCommand("plan", "Plan before acting on complex tasks"),
+        BotCommand("plan", "Switch to plan mode (think first, then act)"),
+        BotCommand("normal", "Switch to normal mode (execute directly)"),
         BotCommand("stop", "Stop the current task"),
         BotCommand("help", "Show available commands"),
     ]

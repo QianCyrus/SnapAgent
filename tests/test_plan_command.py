@@ -1,4 +1,4 @@
-"""Tests for /plan command dispatch in AgentLoop."""
+"""Tests for /plan and /normal mode toggle in AgentLoop."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from snapagent.bus.events import InboundMessage
+from snapagent.session.manager import Session
 
 
 def _make_loop():
@@ -27,34 +28,46 @@ def _make_loop():
     ):
         mock_sub_mgr.return_value.cancel_by_session = AsyncMock(return_value=0)
         loop = AgentLoop(bus=bus, provider=provider, workspace=workspace)
-    return loop, bus
+
+    # Replace session manager with one that returns a real Session
+    session = Session(key="test:c1")
+    loop.sessions = MagicMock()
+    loop.sessions.get_or_create.return_value = session
+    loop.sessions.save = MagicMock()
+    return loop, bus, session
 
 
 @pytest.mark.asyncio
-async def test_plan_empty_shows_usage():
-    """'/plan' with no content returns usage hint."""
-    loop, bus = _make_loop()
+async def test_plan_toggles_mode_on():
+    """/plan sets plan_mode in session metadata."""
+    loop, bus, session = _make_loop()
     msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/plan")
     result = await loop._process_message(msg)
     assert result is not None
-    assert "Usage: /plan" in result.content
+    assert "Plan mode ON" in result.content
+    assert session.metadata.get("plan_mode") is True
+    loop.sessions.save.assert_called()
 
 
 @pytest.mark.asyncio
-async def test_plan_spaces_only_shows_usage():
-    """'/plan   ' (spaces only) returns usage hint."""
-    loop, bus = _make_loop()
-    msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/plan   ")
+async def test_normal_toggles_mode_off():
+    """/normal removes plan_mode from session metadata."""
+    loop, bus, session = _make_loop()
+    session.metadata["plan_mode"] = True
+    msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/normal")
     result = await loop._process_message(msg)
     assert result is not None
-    assert "Usage: /plan" in result.content
+    assert "Normal mode" in result.content
+    assert "plan_mode" not in session.metadata
+    loop.sessions.save.assert_called()
 
 
 @pytest.mark.asyncio
-async def test_help_includes_plan():
-    """'/help' output includes /plan command."""
-    loop, bus = _make_loop()
+async def test_help_includes_plan_and_normal():
+    """/help output includes both /plan and /normal."""
+    loop, bus, session = _make_loop()
     msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/help")
     result = await loop._process_message(msg)
     assert result is not None
     assert "/plan" in result.content
+    assert "/normal" in result.content

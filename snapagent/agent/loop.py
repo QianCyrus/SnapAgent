@@ -403,24 +403,41 @@ class AgentLoop:
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="🐈 snapagent commands:\n/new — Start a new conversation\n/plan — Plan before acting on complex tasks\n/stop — Stop the current task\n/help — Show available commands",
+                content="🐈 snapagent commands:\n/new — Start a new conversation\n/plan — Switch to plan mode (think first, then act)\n/normal — Switch to normal mode (execute directly)\n/stop — Stop the current task\n/help — Show available commands",
             )
 
-        if cmd.startswith("/plan"):
-            plan_content = msg.content.strip()[5:].strip()
-            if not plan_content:
-                return OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content="Usage: /plan <your request>\nExample: /plan Research the latest AI safety frameworks",
-                )
+        if cmd == "/plan":
+            session.metadata["plan_mode"] = True
+            self.sessions.save(session)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=(
+                    "\U0001f4cb Plan mode ON — I'll create a step-by-step plan before acting.\n"
+                    "Use /normal to switch back."
+                ),
+            )
+        if cmd == "/normal":
+            session.metadata.pop("plan_mode", None)
+            self.sessions.save(session)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=(
+                    "\u26a1 Normal mode — I'll execute tools directly.\n"
+                    "Use /plan to switch back."
+                ),
+            )
+
+        plan_mode = session.metadata.get("plan_mode", False)
+        if plan_mode:
             msg = InboundMessage(
                 channel=msg.channel,
                 sender_id=msg.sender_id,
                 chat_id=msg.chat_id,
                 content=(
                     "[Plan Mode] Generate a structured plan first, "
-                    "then execute it step by step.\n\n" + plan_content
+                    "then execute it step by step.\n\n" + msg.content
                 ),
                 timestamp=msg.timestamp,
                 media=msg.media,
@@ -474,9 +491,13 @@ class AgentLoop:
                 )
             )
 
+        on_progress = on_progress or _bus_progress
+        if plan_mode:
+            await on_progress("\U0001f4cb Plan mode — thinking before acting...")
+
         final_content, _, all_msgs = await self._run_agent_loop(
             initial_messages,
-            on_progress=on_progress or _bus_progress,
+            on_progress=on_progress,
         )
 
         if final_content is None:
