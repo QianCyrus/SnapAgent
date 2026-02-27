@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 
 @dataclass(slots=True)
@@ -21,6 +23,49 @@ class InputEnvelope:
     @property
     def session_key(self) -> str:
         return self.session_key_override or f"{self.channel}:{self.chat_id}"
+
+
+@dataclass(slots=True)
+class DiagnosticEvent:
+    """Structured observability event emitted by the runtime."""
+
+    name: str
+    component: str
+    severity: str = "info"
+    event_id: str = field(default_factory=lambda: uuid4().hex)
+    ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    session_key: str | None = None
+    channel: str | None = None
+    chat_id: str | None = None
+    run_id: str | None = None
+    turn_id: str | None = None
+    operation: str | None = None
+    status: str | None = None
+    latency_ms: float | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    attrs: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to JSON-serializable payload."""
+        return {
+            "event_id": self.event_id,
+            "ts": self.ts.isoformat(),
+            "name": self.name,
+            "component": self.component,
+            "severity": self.severity,
+            "session_key": self.session_key,
+            "channel": self.channel,
+            "chat_id": self.chat_id,
+            "run_id": self.run_id,
+            "turn_id": self.turn_id,
+            "operation": self.operation,
+            "status": self.status,
+            "latency_ms": self.latency_ms,
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+            "attrs": self.attrs,
+        }
 
 
 @dataclass(slots=True)
