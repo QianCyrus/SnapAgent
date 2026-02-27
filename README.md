@@ -4,14 +4,16 @@ A lightweight personal AI assistant framework built on Python.
 
 ## Changelog
 
-### v0.2 — Web Search Dedup & Workflow Optimization
+### v0.2 — Web Search Dedup, Workflow Optimization & Plan Mode
 
 - **Tool call deduplication**: identical tool calls within a single agent turn are now cached and executed only once, eliminating redundant API calls and saving quota.
 - **Search loop detection**: when the agent calls `web_search` 3+ times consecutively, a system nudge is injected to stop searching and synthesize from existing results.
 - **Web research workflow**: system prompt now guides the agent through a structured PLAN → SEARCH → FETCH → SYNTHESIZE pipeline instead of open-ended searching.
 - **Fetch hint**: search results now include a `web_fetch` tip, encouraging the agent to read full page content rather than relying solely on snippets.
-- New module: `snapagent/orchestrator/dedup.py` — `ToolCallDedup` with per-turn cache and consecutive-search counter.
-- 13 new tests (unit + integration) covering dedup cache, loop detection, and orchestrator integration.
+- **`/plan` command**: new slash command that triggers structured task planning before execution. The agent generates a TODO-style checklist, then executes step by step. Plan detection formats output with clipboard emoji in progress messages.
+- **Plan skill** (`always: true`): teaches the agent to automatically plan for complex multi-step tasks (3+ steps, research, comparison, synthesis) even without `/plan`.
+- New modules: `snapagent/orchestrator/dedup.py`, `snapagent/skills/plan/SKILL.md`.
+- 20 new tests (unit + integration) covering dedup, loop detection, plan command, and plan detection.
 
 ### v0.1 — Web Search Quality & Multi-Source Fusion
 

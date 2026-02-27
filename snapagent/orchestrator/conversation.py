@@ -57,7 +57,11 @@ class ConversationOrchestrator:
                 if on_progress:
                     clean = self._strip_think(response.content)
                     if clean:
-                        await on_progress(clean)
+                        plan = self._extract_plan(clean)
+                        if plan:
+                            await on_progress(f"\U0001f4cb {plan}")
+                        else:
+                            await on_progress(clean)
                     await on_progress(
                         self._tool_hint(response.tool_calls, step=iteration), tool_hint=True
                     )
@@ -167,6 +171,16 @@ class ConversationOrchestrator:
         if not text:
             return None
         return re.sub(r"<think>[\s\S]*?</think>", "", text).strip() or None
+
+    _PLAN_RE = re.compile(r"\*\*Plan:\*\*\n((?:\d+\.\s*\[[ x]\].*\n?)+)", re.IGNORECASE)
+
+    @staticmethod
+    def _extract_plan(text: str | None) -> str | None:
+        """Extract a plan block from assistant text, if present."""
+        if not text:
+            return None
+        m = ConversationOrchestrator._PLAN_RE.search(text)
+        return m.group(0).strip() if m else None
 
     @staticmethod
     def _tool_hint(tool_calls: list, step: int = 0) -> str:

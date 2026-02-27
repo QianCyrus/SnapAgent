@@ -403,7 +403,29 @@ class AgentLoop:
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="🐈 snapagent commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/help — Show available commands",
+                content="🐈 snapagent commands:\n/new — Start a new conversation\n/plan — Plan before acting on complex tasks\n/stop — Stop the current task\n/help — Show available commands",
+            )
+
+        if cmd.startswith("/plan"):
+            plan_content = msg.content.strip()[5:].strip()
+            if not plan_content:
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="Usage: /plan <your request>\nExample: /plan Research the latest AI safety frameworks",
+                )
+            msg = InboundMessage(
+                channel=msg.channel,
+                sender_id=msg.sender_id,
+                chat_id=msg.chat_id,
+                content=(
+                    "[Plan Mode] Generate a structured plan first, "
+                    "then execute it step by step.\n\n" + plan_content
+                ),
+                timestamp=msg.timestamp,
+                media=msg.media,
+                metadata=msg.metadata,
+                session_key_override=msg.session_key_override,
             )
 
         unconsolidated = len(session.messages) - session.last_consolidated
