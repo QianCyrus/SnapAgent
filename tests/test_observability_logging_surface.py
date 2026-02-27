@@ -174,3 +174,43 @@ def test_follow_continues_after_rotation(tmp_path) -> None:
 
     second = out.get(timeout=2.0)
     assert second["name"] == "after-rotate"
+
+
+def test_agent_single_message_emits_observability_logs(tmp_path, monkeypatch) -> None:
+    from snapagent.config.schema import Config
+    from snapagent.providers.base import LLMProvider, LLMResponse
+
+    monkeypatch.setattr("snapagent.config.loader.get_data_dir", lambda: tmp_path)
+
+    config = Config()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    config.agents.defaults.workspace = str(workspace)
+
+    class _FakeProvider(LLMProvider):
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+        ):
+            return LLMResponse(content="ok")
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+    monkeypatch.setattr("snapagent.config.loader.load_config", lambda: config)
+    monkeypatch.setattr("snapagent.cli.commands._make_provider", lambda _config: _FakeProvider())
+
+    result = runner.invoke(app, ["agent", "-m", "ping", "--no-markdown"])
+
+    assert result.exit_code == 0
+
+    sink = JsonlLoggingSink(tmp_path / "logs" / "diagnostic.jsonl")
+    rows = sink.query(limit=20)
+    names = [row.get("name") for row in rows]
+
+    assert "inbound.received" in names
+    assert "outbound.published" in names
