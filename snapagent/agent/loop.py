@@ -6,6 +6,7 @@ import asyncio
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from uuid import uuid4
 
 from loguru import logger
 
@@ -281,6 +282,7 @@ class AgentLoop:
 
     async def _handle_stop(self, msg: InboundMessage) -> None:
         """Cancel all active tasks and subagents for the session."""
+        run_id, turn_id = self._ensure_correlation(msg)
         tasks = self._active_tasks.pop(msg.session_key, [])
         cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
         for t in tasks:
@@ -298,6 +300,8 @@ class AgentLoop:
                 channel=msg.channel,
                 chat_id=msg.chat_id,
                 content=content,
+                run_id=run_id,
+                turn_id=turn_id,
             )
         )
 
@@ -308,6 +312,20 @@ class AgentLoop:
             tasks.remove(task)
             if not tasks:
                 del self._active_tasks[session_key]
+
+    @staticmethod
+    def _ensure_correlation(msg: InboundMessage) -> tuple[str, str]:
+        """Guarantee run/turn correlation IDs on inbound messages."""
+        metadata = msg.metadata or {}
+        if msg.metadata is None:
+            msg.metadata = metadata
+        run_id = msg.run_id or metadata.get("run_id") or uuid4().hex
+        turn_id = msg.turn_id or metadata.get("turn_id") or uuid4().hex[:12]
+        msg.run_id = run_id
+        msg.turn_id = turn_id
+        metadata["run_id"] = run_id
+        metadata["turn_id"] = turn_id
+        return run_id, turn_id
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message under the global lock."""
@@ -325,6 +343,8 @@ class AgentLoop:
                                 chat_id=msg.chat_id,
                                 content="",
                                 metadata=msg.metadata or {},
+                                run_id=msg.run_id,
+                                turn_id=msg.turn_id,
                             )
                         )
                 except asyncio.CancelledError:
@@ -337,6 +357,8 @@ class AgentLoop:
                             channel=msg.channel,
                             chat_id=msg.chat_id,
                             content="Sorry, I encountered an error.",
+                            run_id=msg.run_id,
+                            turn_id=msg.turn_id,
                         )
                     )
         finally:
@@ -375,6 +397,8 @@ class AgentLoop:
         on_progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
+        run_id, turn_id = self._ensure_correlation(msg)
+
         # System messages: parse origin from chat_id ("channel:chat_id")
         if msg.channel == "system":
             channel, chat_id = (
@@ -399,6 +423,8 @@ class AgentLoop:
                 channel=channel,
                 chat_id=chat_id,
                 content=final_content or "Background task completed.",
+                run_id=run_id,
+                turn_id=turn_id,
             )
 
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
@@ -423,6 +449,8 @@ class AgentLoop:
                                 channel=msg.channel,
                                 chat_id=msg.chat_id,
                                 content="Memory archival failed, session not cleared. Please try again.",
+                                run_id=run_id,
+                                turn_id=turn_id,
                             )
             except Exception:
                 logger.exception("/new archival failed for {}", session.key)
@@ -430,6 +458,8 @@ class AgentLoop:
                     channel=msg.channel,
                     chat_id=msg.chat_id,
                     content="Memory archival failed, session not cleared. Please try again.",
+                    run_id=run_id,
+                    turn_id=turn_id,
                 )
             finally:
                 self._consolidating.discard(session.key)
@@ -439,13 +469,19 @@ class AgentLoop:
             self.sessions.save(session)
             self.sessions.invalidate(session.key)
             return OutboundMessage(
-                channel=msg.channel, chat_id=msg.chat_id, content="New session started."
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="New session started.",
+                run_id=run_id,
+                turn_id=turn_id,
             )
         if cmd == "/help":
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
                 content="🐈 snapagent commands:\n/new — Start a new conversation\n/plan — Switch to plan mode (think first, then act)\n/normal — Switch to normal mode (execute directly)\n/stop — Stop the current task\n/help — Show available commands",
+                run_id=run_id,
+                turn_id=turn_id,
             )
 
         if cmd == "/plan":
@@ -460,6 +496,8 @@ class AgentLoop:
                     "before taking any action.\n"
                     "Use /normal to switch back to direct execution."
                 ),
+                run_id=run_id,
+                turn_id=turn_id,
             )
         if cmd == "/normal":
             session.metadata.pop("plan_mode", None)
@@ -471,6 +509,8 @@ class AgentLoop:
                     "\u26a1 Normal mode — I'll execute tools directly.\n"
                     "Use /plan to switch back."
                 ),
+                run_id=run_id,
+                turn_id=turn_id,
             )
 
         plan_mode = session.metadata.get("plan_mode", False)
@@ -488,6 +528,8 @@ class AgentLoop:
                 media=msg.media,
                 metadata=msg.metadata,
                 session_key_override=msg.session_key_override,
+                run_id=run_id,
+                turn_id=turn_id,
             )
 
         consolidation_threshold = self.consolidation_interval or self.memory_window
@@ -528,12 +570,16 @@ class AgentLoop:
             meta = dict(msg.metadata or {})
             meta["_progress"] = True
             meta["_tool_hint"] = tool_hint
+            meta["run_id"] = run_id
+            meta["turn_id"] = turn_id
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
                     content=content,
                     metadata=meta,
+                    run_id=run_id,
+                    turn_id=turn_id,
                 )
             )
 
@@ -566,7 +612,13 @@ class AgentLoop:
             channel=msg.channel,
             chat_id=msg.chat_id,
             content=final_content,
-            metadata=msg.metadata or {},
+            metadata={
+                **(msg.metadata or {}),
+                "run_id": run_id,
+                "turn_id": turn_id,
+            },
+            run_id=run_id,
+            turn_id=turn_id,
         )
 
     _TOOL_RESULT_MAX_CHARS = 500
