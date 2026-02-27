@@ -6,10 +6,16 @@ import json
 import re
 from typing import Awaitable, Callable
 
+from loguru import logger
+
 from snapagent.adapters.provider import ProviderAdapter
 from snapagent.adapters.tools import ToolGateway
-from snapagent.core.types import AgentResult, ToolTrace
+from snapagent.core.types import AgentResult, ReactStep, ReactTrace, ToolTrace
 from snapagent.orchestrator.dedup import ToolCallDedup
+from snapagent.utils.think_strip import ThinkTagStripper
+
+# Module-level stripper instance (stateless, safe to share).
+_think_stripper = ThinkTagStripper()
 
 # Friendly display labels for built-in tools: (emoji, label)
 _TOOL_DISPLAY: dict[str, tuple[str, str]] = {
@@ -25,6 +31,8 @@ _TOOL_DISPLAY: dict[str, tuple[str, str]] = {
     "spawn": ("\U0001f504", "Spawning subtask"),
     "rag_query": ("\U0001f9ea", "Fact-checking"),
 }
+
+_OBSERVATION_PREVIEW_LEN = 200
 
 
 class ConversationOrchestrator:
@@ -47,25 +55,38 @@ class ConversationOrchestrator:
         iteration = 0
         final_content: str | None = None
         tool_trace: list[ToolTrace] = []
+        react_steps: list[ReactStep] = []
         usage: dict[str, int] = {}
         dedup = ToolCallDedup()
 
         while iteration < self.max_iterations:
             iteration += 1
+
             if before_model:
                 await before_model(messages)
-            response = await self.provider.chat(messages=messages, tools=self.tools.definitions())
+
+            # Hard-cap guarantee: even provider exceptions count toward budget.
+            try:
+                response = await self.provider.chat(
+                    messages=messages, tools=self.tools.definitions()
+                )
+            except Exception:
+                logger.exception("LLM call failed at iteration {}", iteration)
+                break
+
             usage = self._merge_usage(usage, response.usage)
 
             if response.has_tool_calls:
+                # --- Thought ---
+                thought = self._strip_think(response.content)
+
                 if on_progress:
-                    clean = self._strip_think(response.content)
-                    if clean:
-                        plan = self._extract_plan(clean)
+                    if thought:
+                        plan = self._extract_plan(thought)
                         if plan:
                             await on_progress(f"\U0001f4cb {plan}")
                         else:
-                            await on_progress(clean)
+                            await on_progress(thought)
                     await on_progress(
                         self._tool_hint(response.tool_calls, step=iteration), tool_hint=True
                     )
@@ -90,6 +111,11 @@ class ConversationOrchestrator:
                     }
                 )
 
+                # --- Actions + Observations ---
+                step_traces: list[ToolTrace] = []
+                step_observations: list[str] = []
+                interrupted = False
+
                 for index, tool_call in enumerate(response.tool_calls):
                     if before_tool and await before_tool(messages, index, response.tool_calls):
                         for cancelled in response.tool_calls[index:]:
@@ -101,7 +127,9 @@ class ConversationOrchestrator:
                                     "content": "CANCELLED: User interrupted",
                                 }
                             )
+                        interrupted = True
                         break
+
                     if isinstance(tool_call.arguments, dict):
                         args = tool_call.arguments
                     elif isinstance(tool_call.arguments, str):
@@ -113,21 +141,43 @@ class ConversationOrchestrator:
                     else:
                         args = {}
 
-                    dup = dedup.check(tool_call.name, args)
-                    if dup.is_duplicate:
-                        result = dup.cached_result or ""
+                    # Hard-block: if search cap reached, refuse further searches.
+                    if tool_call.name == "web_search" and dedup.search_cap_reached:
+                        result = (
+                            "[System] Search limit reached. You have already performed "
+                            f"{dedup.total_search_count} searches this turn. "
+                            "Use the results you already have to answer the question. "
+                            "If you need more detail, use web_fetch on a URL from "
+                            "your existing results."
+                        )
                         trace = ToolTrace(
                             name=tool_call.name,
                             arguments=args,
-                            result_preview="[cached]",
-                            ok=True,
+                            result_preview="[blocked: search cap]",
+                            ok=False,
                         )
                     else:
-                        result, trace = await self.tools.invoke(tool_call.name, args)
-                        dedup.store(tool_call.name, args, result)
+                        dup = dedup.check(tool_call.name, args)
+                        if dup.is_duplicate:
+                            result = dup.cached_result or ""
+                            trace = ToolTrace(
+                                name=tool_call.name,
+                                arguments=args,
+                                result_preview="[cached: duplicate query]",
+                                ok=True,
+                            )
+                        else:
+                            result, trace = await self.tools.invoke(tool_call.name, args)
+                            dedup.store(tool_call.name, args, result)
 
                     dedup.record_tool_name(tool_call.name)
                     tool_trace.append(trace)
+                    step_traces.append(trace)
+                    step_observations.append(
+                        result[:_OBSERVATION_PREVIEW_LEN]
+                        if len(result) > _OBSERVATION_PREVIEW_LEN
+                        else result
+                    )
                     messages.append(
                         {
                             "role": "tool",
@@ -137,13 +187,27 @@ class ConversationOrchestrator:
                         }
                     )
 
-                if dedup.search_loop_detected:
+                react_steps.append(
+                    ReactStep(
+                        iteration=iteration,
+                        thought=thought,
+                        actions=step_traces,
+                        observations=step_observations,
+                    )
+                )
+
+                if dedup.search_loop_detected and not interrupted:
+                    history = dedup.search_history_summary()
                     messages.append({
                         "role": "user",
                         "content": (
-                            "[System] You have called web_search multiple times in a row. "
-                            "Stop searching and use the results you already have. "
-                            "If you need more detail, use web_fetch to read specific pages."
+                            "[System] STOP SEARCHING. You have called web_search "
+                            f"{dedup.consecutive_search_count} times consecutively. "
+                            "You already have sufficient search results to answer.\n\n"
+                            f"{history}\n\n"
+                            "Synthesize your answer NOW from the results above. "
+                            "If you need more detail on a specific page, use web_fetch "
+                            "instead of searching again."
                         ),
                     })
             else:
@@ -156,19 +220,28 @@ class ConversationOrchestrator:
                     }
                 )
                 final_content = clean
+                react_steps.append(ReactStep(iteration=iteration, thought=clean))
                 break
 
-        if final_content is None:
+        hit_cap = final_content is None
+        if hit_cap:
             final_content = (
                 f"I reached the maximum number of tool call iterations ({self.max_iterations}) "
                 "without completing the task. You can try breaking the task into smaller steps."
             )
 
+        react_trace = ReactTrace(steps=react_steps, hit_iteration_cap=hit_cap)
+
         return AgentResult(
             final_text=final_content,
             tool_trace=tool_trace,
+            react_trace=react_trace,
             usage=usage,
-            diagnostics={"iterations": iteration, "tool_calls": len(tool_trace)},
+            diagnostics={
+                "iterations": iteration,
+                "tool_calls": len(tool_trace),
+                "react_steps": len(react_steps),
+            },
             messages=messages,
         )
 
@@ -183,9 +256,7 @@ class ConversationOrchestrator:
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
-        if not text:
-            return None
-        return re.sub(r"<think>[\s\S]*?</think>", "", text).strip() or None
+        return _think_stripper.strip(text)
 
     _PLAN_RE = re.compile(r"\*\*Plan:\*\*\n((?:\d+\.\s*\[[ x]\].*\n?)+)", re.IGNORECASE)
 

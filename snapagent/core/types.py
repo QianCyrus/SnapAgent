@@ -48,11 +48,34 @@ class CompressedContext:
 
 
 @dataclass(slots=True)
+class ReactStep:
+    """One Thought-Action-Observation step in a ReAct trace."""
+
+    iteration: int
+    thought: str | None = None
+    actions: list[ToolTrace] = field(default_factory=list)
+    observations: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ReactTrace:
+    """Full ReAct trace for one agent turn."""
+
+    steps: list[ReactStep] = field(default_factory=list)
+    hit_iteration_cap: bool = False
+
+    @property
+    def total_tool_calls(self) -> int:
+        return sum(len(s.actions) for s in self.steps)
+
+
+@dataclass(slots=True)
 class AgentResult:
     """Final result emitted by ConversationOrchestrator."""
 
     final_text: str
     tool_trace: list[ToolTrace] = field(default_factory=list)
+    react_trace: ReactTrace | None = None
     usage: dict[str, int] = field(default_factory=dict)
     diagnostics: dict[str, Any] = field(default_factory=dict)
     messages: list[dict[str, Any]] = field(default_factory=list)

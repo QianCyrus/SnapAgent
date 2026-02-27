@@ -53,15 +53,13 @@ async def test_messagebus_non_blocking_check() -> None:
     assert elapsed < 0.01
 
 
-def test_system_prompt_includes_event_handling() -> None:
+def test_system_prompt_includes_event_handling(tmp_path) -> None:
     """Prompt should include interrupt instructions when enabled."""
     from snapagent.agent.context import ContextBuilder
 
-    workspace = MagicMock()
-    workspace.__truediv__ = MagicMock(return_value=MagicMock())
-
-    with patch("snapagent.agent.context.MemoryStore"), patch("snapagent.agent.context.SkillsLoader"):
-        builder = ContextBuilder(workspace)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    builder = ContextBuilder(workspace)
 
     prompt = builder.build_system_prompt(enable_event_handling=True)
 
@@ -71,15 +69,13 @@ def test_system_prompt_includes_event_handling() -> None:
     assert "ALWAYS takes priority" in prompt
 
 
-def test_system_prompt_no_event_handling_by_default() -> None:
+def test_system_prompt_no_event_handling_by_default(tmp_path) -> None:
     """Prompt should remain unchanged unless explicitly enabled."""
     from snapagent.agent.context import ContextBuilder
 
-    workspace = MagicMock()
-    workspace.__truediv__ = MagicMock(return_value=MagicMock())
-
-    with patch("snapagent.agent.context.MemoryStore"), patch("snapagent.agent.context.SkillsLoader"):
-        builder = ContextBuilder(workspace)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    builder = ContextBuilder(workspace)
 
     assert "Event Handling" not in builder.build_system_prompt()
 

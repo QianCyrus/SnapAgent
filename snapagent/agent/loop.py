@@ -65,6 +65,8 @@ class AgentLoop:
         channels_config: ChannelsConfig | None = None,
         compression_config: CompressionConfig | None = None,
         enable_event_handling: bool = False,
+        consolidation_interval: int = 0,
+        enable_content_tagging: bool = True,
     ):
         from snapagent.config.schema import CompressionConfig, ExecToolConfig
 
@@ -83,8 +85,9 @@ class AgentLoop:
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         self.enable_event_handling = enable_event_handling
+        self.consolidation_interval = consolidation_interval
 
-        self.context = ContextBuilder(workspace)
+        self.context = ContextBuilder(workspace, enable_content_tagging=enable_content_tagging)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
@@ -117,7 +120,7 @@ class AgentLoop:
             max_tokens=self.max_tokens,
             temperature=self.temperature,
         )
-        self._tool_gateway = ToolGateway(self.tools)
+        self._tool_gateway = ToolGateway(self.tools, tag_results=enable_content_tagging)
         self._orchestrator = ConversationOrchestrator(
             provider=self._provider_adapter,
             tools=self._tool_gateway,
@@ -136,6 +139,7 @@ class AgentLoop:
                 timeout=self.exec_config.timeout,
                 restrict_to_workspace=self.restrict_to_workspace,
                 path_append=self.exec_config.path_append,
+                extra_deny_patterns=getattr(self.exec_config, "extra_deny_patterns", None),
             )
         )
         self.tools.register(WebSearchTool(api_key=self.brave_api_key))
@@ -486,8 +490,9 @@ class AgentLoop:
                 session_key_override=msg.session_key_override,
             )
 
+        consolidation_threshold = self.consolidation_interval or self.memory_window
         unconsolidated = len(session.messages) - session.last_consolidated
-        if unconsolidated >= self.memory_window and session.key not in self._consolidating:
+        if unconsolidated >= consolidation_threshold and session.key not in self._consolidating:
             self._consolidating.add(session.key)
             lock = self._get_consolidation_lock(session.key)
 

@@ -522,6 +522,8 @@ def gateway(
         channels_config=config.channels,
         compression_config=config.compression,
         enable_event_handling=config.agents.defaults.enable_event_handling,
+        consolidation_interval=config.agents.defaults.consolidation_interval,
+        enable_content_tagging=config.tools.security.enable_content_tagging,
     )
 
     # Set cron callback (needs agent)
@@ -690,6 +692,8 @@ def agent(
         channels_config=config.channels,
         compression_config=config.compression,
         enable_event_handling=config.agents.defaults.enable_event_handling,
+        consolidation_interval=config.agents.defaults.consolidation_interval,
+        enable_content_tagging=config.tools.security.enable_content_tagging,
     )
 
     # Show spinner when logs are off (no output to miss); skip when logs are on
@@ -1169,6 +1173,8 @@ def cron_run(
         channels_config=config.channels,
         compression_config=config.compression,
         enable_event_handling=config.agents.defaults.enable_event_handling,
+        consolidation_interval=config.agents.defaults.consolidation_interval,
+        enable_content_tagging=config.tools.security.enable_content_tagging,
     )
 
     store_path = get_data_dir() / "cron" / "jobs.json"

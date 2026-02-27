@@ -225,6 +225,7 @@ class AgentDefaults(Base):
     max_tool_iterations: int = 40
     memory_window: int = 100
     enable_event_handling: bool = False  # Enable async event injection for user interruption
+    consolidation_interval: int = 0  # 0 means "use memory_window" (backward compatible)
 
 
 class AgentsConfig(Base):
@@ -300,6 +301,7 @@ class ExecToolConfig(Base):
 
     timeout: int = 60
     path_append: str = ""
+    extra_deny_patterns: list[str] = Field(default_factory=list)  # Additional regex deny rules
 
 
 class MCPServerConfig(Base):
@@ -313,6 +315,13 @@ class MCPServerConfig(Base):
     tool_timeout: int = 30  # Seconds before a tool call is cancelled
 
 
+class SecurityConfig(Base):
+    """Prompt injection defense configuration."""
+
+    enable_content_tagging: bool = True
+    enable_tool_result_tagging: bool = True
+
+
 class ToolsConfig(Base):
     """Tools configuration."""
 
@@ -320,6 +329,7 @@ class ToolsConfig(Base):
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
 
 
 class CompressionConfig(Base):
