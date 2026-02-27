@@ -9,6 +9,7 @@ from typing import Awaitable, Callable
 from snapagent.adapters.provider import ProviderAdapter
 from snapagent.adapters.tools import ToolGateway
 from snapagent.core.types import AgentResult, ToolTrace
+from snapagent.orchestrator.dedup import ToolCallDedup
 
 # Friendly display labels for built-in tools: (emoji, label)
 _TOOL_DISPLAY: dict[str, tuple[str, str]] = {
@@ -45,6 +46,7 @@ class ConversationOrchestrator:
         final_content: str | None = None
         tool_trace: list[ToolTrace] = []
         usage: dict[str, int] = {}
+        dedup = ToolCallDedup()
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -91,7 +93,21 @@ class ConversationOrchestrator:
                             args = {}
                     else:
                         args = {}
-                    result, trace = await self.tools.invoke(tool_call.name, args)
+
+                    dup = dedup.check(tool_call.name, args)
+                    if dup.is_duplicate:
+                        result = dup.cached_result or ""
+                        trace = ToolTrace(
+                            name=tool_call.name,
+                            arguments=args,
+                            result_preview="[cached]",
+                            ok=True,
+                        )
+                    else:
+                        result, trace = await self.tools.invoke(tool_call.name, args)
+                        dedup.store(tool_call.name, args, result)
+
+                    dedup.record_tool_name(tool_call.name)
                     tool_trace.append(trace)
                     messages.append(
                         {
@@ -101,6 +117,16 @@ class ConversationOrchestrator:
                             "content": result,
                         }
                     )
+
+                if dedup.search_loop_detected:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[System] You have called web_search multiple times in a row. "
+                            "Stop searching and use the results you already have. "
+                            "If you need more detail, use web_fetch to read specific pages."
+                        ),
+                    })
             else:
                 clean = self._strip_think(response.content) or ""
                 messages.append(

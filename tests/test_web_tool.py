@@ -183,3 +183,10 @@ def test_web_search_merge_and_rank_dedupes_equivalent_urls() -> None:
     assert len(merged) == 2
     assert merged[0]["url"] == "https://example.com/article"
     assert merged[0]["title"] == "OpenAI API Guide"
+
+
+def test_search_results_include_fetch_hint():
+    """Formatted search results should nudge the agent toward web_fetch."""
+    results = [{"title": "Example", "url": "https://example.com", "description": "desc"}]
+    output = WebSearchTool._format_search_results("test query", results, 5)
+    assert "web_fetch" in output
