@@ -98,6 +98,23 @@ def _provider_auth_env_candidates(provider_name: str | None, *, env_key: str | N
     return list(dict.fromkeys(candidates))
 
 
+def _resolve_provider_auth(
+    provider_name: str | None,
+    *,
+    provider_cfg: Any | None,
+    env_key: str | None,
+) -> tuple[bool, str]:
+    has_auth = bool(provider_cfg and _has_value(provider_cfg.api_key))
+    auth_source = "config" if has_auth else ""
+    if not has_auth:
+        for env_name in _provider_auth_env_candidates(provider_name, env_key=env_key):
+            if os.environ.get(env_name, "").strip():
+                has_auth = True
+                auth_source = f"env:{env_name}"
+                break
+    return has_auth, auth_source
+
+
 def _provider_evidence(config: Config) -> HealthEvidence:
     model = config.agents.defaults.model
     provider_name = config.get_provider_name(model)
@@ -131,8 +148,24 @@ def _provider_evidence(config: Config) -> HealthEvidence:
 
     if spec and spec.is_local:
         api_base = provider_cfg.api_base if provider_cfg else None
-        if _has_value(api_base):
-            details["api_base"] = api_base
+        if not _has_value(api_base):
+            return HealthEvidence(
+                component="provider",
+                status="failed",
+                summary=f"Local provider missing api_base: {provider_name}",
+                details=details,
+            )
+
+        has_auth, auth_source = _resolve_provider_auth(
+            provider_name,
+            provider_cfg=provider_cfg,
+            env_key=spec.env_key if spec else "",
+        )
+        details["api_base"] = api_base
+        details["has_auth"] = has_auth
+        if auth_source:
+            details["auth_source"] = auth_source
+        if has_auth:
             return HealthEvidence(
                 component="provider",
                 status="ok",
@@ -142,23 +175,20 @@ def _provider_evidence(config: Config) -> HealthEvidence:
         return HealthEvidence(
             component="provider",
             status="failed",
-            summary=f"Local provider missing api_base: {provider_name}",
+            summary=f"Local provider missing credentials: {provider_name}",
             details=details,
         )
 
-    has_key = bool(provider_cfg and _has_value(provider_cfg.api_key))
-    auth_source = "config" if has_key else ""
-    if not has_key:
-        for env_name in _provider_auth_env_candidates(provider_name, env_key=spec.env_key if spec else ""):
-            if os.environ.get(env_name, "").strip():
-                has_key = True
-                auth_source = f"env:{env_name}"
-                break
+    has_auth, auth_source = _resolve_provider_auth(
+        provider_name,
+        provider_cfg=provider_cfg,
+        env_key=spec.env_key if spec else "",
+    )
 
-    details["has_auth"] = has_key
+    details["has_auth"] = has_auth
     if auth_source:
         details["auth_source"] = auth_source
-    if has_key:
+    if has_auth:
         return HealthEvidence(
             component="provider",
             status="ok",
