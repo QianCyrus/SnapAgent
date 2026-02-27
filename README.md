@@ -4,6 +4,15 @@ A lightweight personal AI assistant framework built on Python.
 
 ## Changelog
 
+### v0.3 — ReAct Core, Prompt Security & Async Interrupt Handling
+
+- **ReAct tracing core**: orchestrator now records thought/action/observation style steps with stronger iteration-cap handling.
+- **Prompt layer architecture**: system prompt assembly is now pluggable via layered prompt components.
+- **Prompt-injection hardening**: trust-boundary tagging, runtime metadata tagging, and safer tool-result handling.
+- **Exec sandbox strengthening**: additional deny-pattern controls and safer command-execution boundaries.
+- **Async interruption (opt-in)**: when `agents.defaults.enable_event_handling = true`, new in-session messages can interrupt queued tool calls. Events are injected before model/tool execution and remaining tool calls are marked cancelled.
+- **Config additions**: `agents.defaults.enable_event_handling`, `agents.defaults.consolidation_interval`, and tool security toggles.
+
 ### v0.2 — Web Search Dedup, Plan Mode & Workflow Optimization
 
 - **Tool call dedup**: identical tool calls within a turn are cached and executed only once.
