@@ -233,12 +233,15 @@ class AgentLoop:
             event = await self.bus.check_events(session_key)
             if not event:
                 return False
+            flattened_event = self._flatten_interrupt_events(event)
             messages.append(
                 {
                     "role": "system",
                     "content": f"<SYS_EVENT type=\"user_interrupt\">{event}</SYS_EVENT>",
                 }
             )
+            if flattened_event:
+                messages.append({"role": "user", "content": flattened_event})
             return True
 
         async def _before_model(messages: list[dict]) -> None:
@@ -314,6 +317,18 @@ class AgentLoop:
                 del self._active_tasks[session_key]
 
     @staticmethod
+    def _flatten_interrupt_events(raw_events: str) -> str:
+        """Convert queued event bullet list into plain user message text."""
+        lines: list[str] = []
+        for line in raw_events.splitlines():
+            text = line.strip()
+            if text.startswith("- "):
+                text = text[2:]
+            if text:
+                lines.append(text)
+        return "\n".join(lines)
+
+    @staticmethod
     def _ensure_correlation(msg: InboundMessage) -> tuple[str, str]:
         """Guarantee run/turn correlation IDs on inbound messages."""
         metadata = msg.metadata or {}
@@ -363,6 +378,30 @@ class AgentLoop:
                     )
         finally:
             self._processing_tasks.discard(msg.session_key)
+            if self.enable_event_handling:
+                pending = await self.bus.check_events(msg.session_key)
+                if pending:
+                    follow_up_content = self._flatten_interrupt_events(pending)
+                    if not follow_up_content:
+                        return
+                    follow_up = InboundMessage(
+                        channel=msg.channel,
+                        sender_id=msg.sender_id,
+                        chat_id=msg.chat_id,
+                        content=follow_up_content,
+                        media=[],
+                        metadata=dict(msg.metadata or {}),
+                        session_key_override=msg.session_key_override,
+                    )
+                    task = asyncio.create_task(self._dispatch(follow_up))
+                    self._active_tasks.setdefault(follow_up.session_key, []).append(task)
+                    task.add_done_callback(
+                        lambda t, k=follow_up.session_key: self._cleanup_task(k, t)
+                    )
+                    logger.info(
+                        "Replayed queued interrupt event(s) as follow-up for session {}",
+                        msg.session_key,
+                    )
 
     async def close_mcp(self) -> None:
         """Close MCP connections."""
