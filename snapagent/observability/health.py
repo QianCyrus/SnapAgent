@@ -82,6 +82,22 @@ def _has_value(value: Any) -> bool:
     return True
 
 
+def _provider_auth_env_candidates(provider_name: str | None, *, env_key: str | None) -> list[str]:
+    """Return auth env names using the same precedence as runtime provider resolution."""
+    if provider_name == "custom":
+        candidates = ["SNAPAGENT_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
+    else:
+        candidates = []
+        if env_key:
+            candidates.append(env_key)
+        if provider_name == "anthropic":
+            candidates.append("ANTHROPIC_AUTH_TOKEN")
+        candidates.append("SNAPAGENT_API_KEY")
+
+    # Preserve order while removing duplicates.
+    return list(dict.fromkeys(candidates))
+
+
 def _provider_evidence(config: Config) -> HealthEvidence:
     model = config.agents.defaults.model
     provider_name = config.get_provider_name(model)
@@ -131,13 +147,17 @@ def _provider_evidence(config: Config) -> HealthEvidence:
         )
 
     has_key = bool(provider_cfg and _has_value(provider_cfg.api_key))
-    env_key = spec.env_key if spec else ""
-    if not has_key and env_key:
-        has_key = bool(os.environ.get(env_key, "").strip())
+    auth_source = "config" if has_key else ""
     if not has_key:
-        has_key = bool(os.environ.get("SNAPAGENT_API_KEY", "").strip())
+        for env_name in _provider_auth_env_candidates(provider_name, env_key=spec.env_key if spec else ""):
+            if os.environ.get(env_name, "").strip():
+                has_key = True
+                auth_source = f"env:{env_name}"
+                break
 
     details["has_auth"] = has_key
+    if auth_source:
+        details["auth_source"] = auth_source
     if has_key:
         return HealthEvidence(
             component="provider",
@@ -280,4 +300,3 @@ def collect_health_snapshot(
         generated_at=datetime.now(timezone.utc).isoformat(),
         evidence=evidence,
     )
-
