@@ -16,6 +16,7 @@ from snapagent.agent.context import ContextBuilder
 from snapagent.agent.memory import MemoryStore
 from snapagent.agent.subagent import SubagentManager
 from snapagent.agent.tools.cron import CronTool
+from snapagent.agent.tools.doctor import DoctorCheckTool
 from snapagent.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from snapagent.agent.tools.message import MessageTool
 from snapagent.agent.tools.rag import RagQueryTool
@@ -112,6 +113,7 @@ class AgentLoop:
         self._consolidation_tasks: set[asyncio.Task] = set()  # Strong refs to in-flight tasks
         self._consolidation_locks: dict[str, asyncio.Lock] = {}
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> all scheduled tasks
+        self._doctor_tasks: dict[str, asyncio.Task] = {}  # session_key -> active doctor diag task
         self._processing_tasks: set[str] = set()  # Session keys currently being processed
         self._processing_lock = asyncio.Lock()
         self._register_default_tools()
@@ -153,6 +155,7 @@ class AgentLoop:
                 temperature=self.temperature,
             )
         )
+        self.tools.register(DoctorCheckTool())
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
@@ -271,8 +274,12 @@ class AgentLoop:
             except asyncio.TimeoutError:
                 continue
 
-            if msg.content.strip().lower() == "/stop":
+            raw = msg.content.strip()
+            lowered = raw.lower()
+            if lowered == "/stop":
                 await self._handle_stop(msg)
+            elif lowered.startswith("/doctor"):
+                await self._handle_doctor(msg)
             else:
                 if self.enable_event_handling and msg.session_key in self._processing_tasks:
                     await self.bus.publish_event(msg.session_key, msg.content)
@@ -286,17 +293,7 @@ class AgentLoop:
     async def _handle_stop(self, msg: InboundMessage) -> None:
         """Cancel all active tasks and subagents for the session."""
         run_id, turn_id = self._ensure_correlation(msg)
-        tasks = self._active_tasks.pop(msg.session_key, [])
-        cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
-        for t in tasks:
-            try:
-                await t
-            except (asyncio.CancelledError, Exception):
-                pass
-        sub_cancelled = await self.subagents.cancel_by_session(msg.session_key)
-        # Drain any progress messages still queued for this chat
-        self.bus.drain_progress(msg.chat_id)
-        total = cancelled + sub_cancelled
+        total = await self._cancel_session_tasks(msg.session_key, msg.chat_id)
         content = f"⏹ Stopped {total} task(s)." if total else "No active task to stop."
         await self.bus.publish_outbound(
             OutboundMessage(
@@ -308,6 +305,111 @@ class AgentLoop:
             )
         )
 
+    async def _handle_doctor(self, msg: InboundMessage) -> None:
+        """Handle /doctor commands in a dedicated, session-scoped lifecycle."""
+        run_id, turn_id = self._ensure_correlation(msg)
+        key = msg.session_key
+        session = self.sessions.get_or_create(key)
+        text = msg.content.strip()
+        lowered = text.lower()
+        action = lowered.split(maxsplit=2)[1] if len(lowered.split()) > 1 else "start"
+
+        if action == "status":
+            task = self._doctor_tasks.get(key)
+            task_status = "running" if task and not task.done() else "idle"
+            mode = "on" if session.metadata.get("doctor_mode") else "off"
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"🩺 Doctor status: {task_status} (mode={mode}).",
+                    run_id=run_id,
+                    turn_id=turn_id,
+                )
+            )
+            return
+
+        if action == "cancel":
+            total = await self._cancel_session_tasks(key, msg.chat_id)
+            session.metadata.pop("doctor_mode", None)
+            self.sessions.save(session)
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"🩺 Doctor cancelled. Stopped {total} task(s).",
+                    run_id=run_id,
+                    turn_id=turn_id,
+                )
+            )
+            return
+
+        if action == "resume":
+            session.metadata.pop("doctor_mode", None)
+            self.sessions.save(session)
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="▶️ Doctor mode OFF. Conversation resumed.",
+                    run_id=run_id,
+                    turn_id=turn_id,
+                )
+            )
+            return
+
+        note = text[len("/doctor") :].strip() if text.lower().startswith("/doctor") else ""
+        total = await self._cancel_session_tasks(key, msg.chat_id)
+        session.metadata["doctor_mode"] = True
+        self.sessions.save(session)
+
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"🩺 Doctor mode ON. Stopped {total} task(s). Running diagnostics...",
+                run_id=run_id,
+                turn_id=turn_id,
+            )
+        )
+
+        bootstrap = note or (
+            "Please self-diagnose this session. Collect evidence with doctor_check "
+            "(health/status/logs/events) before conclusions."
+        )
+        follow_up = InboundMessage(
+            channel=msg.channel,
+            sender_id=msg.sender_id,
+            chat_id=msg.chat_id,
+            content=bootstrap,
+            media=[],
+            metadata=dict(msg.metadata or {}),
+            session_key_override=msg.session_key_override,
+        )
+        task = asyncio.create_task(self._dispatch(follow_up))
+        self._doctor_tasks[key] = task
+        self._active_tasks.setdefault(follow_up.session_key, []).append(task)
+        task.add_done_callback(lambda t, k=follow_up.session_key: self._cleanup_task(k, t))
+
+    async def _cancel_session_tasks(self, session_key: str, chat_id: str) -> int:
+        """Cancel all active tasks, doctor task, and subagents for one session."""
+        tasks = self._active_tasks.pop(session_key, [])
+        doctor_task = self._doctor_tasks.get(session_key)
+        if doctor_task and doctor_task not in tasks:
+            tasks.append(doctor_task)
+
+        cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        self._doctor_tasks.pop(session_key, None)
+        sub_cancelled = await self.subagents.cancel_by_session(session_key)
+        self.bus.drain_progress(chat_id)
+        return cancelled + sub_cancelled
+
     def _cleanup_task(self, session_key: str, task: asyncio.Task) -> None:
         """Remove a completed task from active tracking."""
         tasks = self._active_tasks.get(session_key)
@@ -315,6 +417,8 @@ class AgentLoop:
             tasks.remove(task)
             if not tasks:
                 del self._active_tasks[session_key]
+        if self._doctor_tasks.get(session_key) is task:
+            self._doctor_tasks.pop(session_key, None)
 
     @staticmethod
     def _flatten_interrupt_events(raw_events: str) -> str:
@@ -518,7 +622,18 @@ class AgentLoop:
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="🐈 snapagent commands:\n/new — Start a new conversation\n/plan — Switch to plan mode (think first, then act)\n/normal — Switch to normal mode (execute directly)\n/stop — Stop the current task\n/help — Show available commands",
+                content=(
+                    "🐈 snapagent commands:\n"
+                    "/new — Start a new conversation\n"
+                    "/plan — Switch to plan mode (think first, then act)\n"
+                    "/normal — Switch to normal mode (execute directly)\n"
+                    "/stop — Stop the current task\n"
+                    "/doctor — Pause current session and start diagnostics\n"
+                    "/doctor status — Show doctor task status\n"
+                    "/doctor cancel — Cancel running diagnostics\n"
+                    "/doctor resume — Exit doctor mode\n"
+                    "/help — Show available commands"
+                ),
                 run_id=run_id,
                 turn_id=turn_id,
             )
@@ -561,6 +676,24 @@ class AgentLoop:
                 content=(
                     "[Plan Mode] First clarify the requirements, then present a structured plan "
                     "and WAIT for the user to approve, modify, or reject it before executing.\n\n"
+                    + msg.content
+                ),
+                timestamp=msg.timestamp,
+                media=msg.media,
+                metadata=msg.metadata,
+                session_key_override=msg.session_key_override,
+                run_id=run_id,
+                turn_id=turn_id,
+            )
+        elif session.metadata.get("doctor_mode") and not cmd.startswith("/"):
+            msg = InboundMessage(
+                channel=msg.channel,
+                sender_id=msg.sender_id,
+                chat_id=msg.chat_id,
+                content=(
+                    "[Doctor Mode] Diagnose issues using evidence first. "
+                    "Use doctor_check with check=health/status/logs/events as needed. "
+                    "Cite observed evidence and then propose next actions.\n\n"
                     + msg.content
                 ),
                 timestamp=msg.timestamp,

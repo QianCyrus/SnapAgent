@@ -159,6 +159,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("new", self._forward_command))
         self._app.add_handler(CommandHandler("plan", self._forward_command))
         self._app.add_handler(CommandHandler("normal", self._forward_command))
+        self._app.add_handler(CommandHandler("doctor", self._on_doctor))
         self._app.add_handler(CommandHandler("stop", self._on_stop))
         self._app.add_handler(CommandHandler("help", self._on_help))
 
@@ -372,6 +373,10 @@ class TelegramChannel(BaseChannel):
             "/plan — Switch to plan mode (think first, then act)\n"
             "/normal — Switch to normal mode (execute directly)\n"
             "/stop — Stop the current task\n"
+            "/doctor — Pause current session and start diagnostics\n"
+            "/doctor status — Show doctor task status\n"
+            "/doctor cancel — Cancel running diagnostics\n"
+            "/doctor resume — Exit doctor mode\n"
             "/help — Show available commands"
         )
 
@@ -393,6 +398,19 @@ class TelegramChannel(BaseChannel):
             sender_id=self._sender_id(update.effective_user),
             chat_id=chat_id,
             content="/stop",
+        )
+
+    async def _on_doctor(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /doctor command: clear progress status before launching diagnostics."""
+        if not update.message or not update.effective_user:
+            return
+        chat_id = str(update.message.chat_id)
+        await self._clear_progress(chat_id)
+        self._stop_typing(chat_id)
+        await self._handle_message(
+            sender_id=self._sender_id(update.effective_user),
+            chat_id=chat_id,
+            content=update.message.text or "/doctor",
         )
 
     async def _forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
