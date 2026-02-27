@@ -57,9 +57,28 @@ class ContextBuilder:
         """Expose layer registry for external registration of custom layers."""
         return self._layers
 
-    def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
+    def build_system_prompt(
+        self,
+        skill_names: list[str] | None = None,
+        enable_event_handling: bool = False,
+    ) -> str:
         """Build the system prompt from registered layers."""
-        return self._layers.render_all()
+        prompt = self._layers.render_all()
+        if not enable_event_handling:
+            return prompt
+        return f"{prompt}\n\n---\n\n{self._get_event_handling_directive()}"
+
+    @staticmethod
+    def _get_event_handling_directive() -> str:
+        """Get the event handling directive for system prompt."""
+        return """## Event Handling
+
+If you receive a <SYS_EVENT> message during tool execution:
+1. IMMEDIATELY acknowledge the event
+2. The event content ALWAYS takes priority over your current task
+3. Respond naturally to the event
+4. Decide whether to continue your previous task or switch to the new request
+"""
 
     @staticmethod
     def _build_runtime_context(channel: str | None, chat_id: str | None) -> str:
@@ -80,10 +99,17 @@ class ContextBuilder:
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
+        enable_event_handling: bool = False,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         return [
-            {"role": "system", "content": self.build_system_prompt(skill_names)},
+            {
+                "role": "system",
+                "content": self.build_system_prompt(
+                    skill_names,
+                    enable_event_handling=enable_event_handling,
+                ),
+            },
             *history,
             {"role": "user", "content": self._build_runtime_context(channel, chat_id)},
             {"role": "user", "content": self._build_user_content(current_message, media)},

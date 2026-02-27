@@ -16,6 +16,7 @@ class MessageBus:
     def __init__(self):
         self.inbound: asyncio.Queue[InboundMessage] = asyncio.Queue()
         self.outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue()
+        self._event_channels: dict[str, asyncio.Queue[str]] = {}
 
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent."""
@@ -55,3 +56,24 @@ class MessageBus:
     def outbound_size(self) -> int:
         """Number of pending outbound messages."""
         return self.outbound.qsize()
+
+    async def publish_event(self, session_key: str, content: str) -> None:
+        """Publish an event to a session-specific event queue."""
+        if session_key not in self._event_channels:
+            self._event_channels[session_key] = asyncio.Queue()
+        await self._event_channels[session_key].put(content)
+
+    async def check_events(self, session_key: str) -> str | None:
+        """Drain accumulated events for a session without blocking."""
+        queue = self._event_channels.get(session_key)
+        if not queue:
+            return None
+
+        events: list[str] = []
+        while not queue.empty():
+            try:
+                events.append(queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+
+        return "\n".join(f"- {event}" for event in events) if events else None

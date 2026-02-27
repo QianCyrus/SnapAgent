@@ -48,6 +48,8 @@ class ConversationOrchestrator:
         initial_messages: list[dict],
         *,
         on_progress: Callable[..., Awaitable[None]] | None = None,
+        before_model: Callable[[list[dict]], Awaitable[None]] | None = None,
+        before_tool: Callable[[list[dict], int, list], Awaitable[bool]] | None = None,
     ) -> AgentResult:
         messages = list(initial_messages)
         iteration = 0
@@ -59,6 +61,9 @@ class ConversationOrchestrator:
 
         while iteration < self.max_iterations:
             iteration += 1
+
+            if before_model:
+                await before_model(messages)
 
             # Hard-cap guarantee: even provider exceptions count toward budget.
             try:
@@ -109,8 +114,22 @@ class ConversationOrchestrator:
                 # --- Actions + Observations ---
                 step_traces: list[ToolTrace] = []
                 step_observations: list[str] = []
+                interrupted = False
 
-                for tool_call in response.tool_calls:
+                for index, tool_call in enumerate(response.tool_calls):
+                    if before_tool and await before_tool(messages, index, response.tool_calls):
+                        for cancelled in response.tool_calls[index:]:
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": cancelled.id,
+                                    "name": cancelled.name,
+                                    "content": "CANCELLED: User interrupted",
+                                }
+                            )
+                        interrupted = True
+                        break
+
                     if isinstance(tool_call.arguments, dict):
                         args = tool_call.arguments
                     elif isinstance(tool_call.arguments, str):
@@ -177,7 +196,7 @@ class ConversationOrchestrator:
                     )
                 )
 
-                if dedup.search_loop_detected:
+                if dedup.search_loop_detected and not interrupted:
                     history = dedup.search_history_summary()
                     messages.append({
                         "role": "user",

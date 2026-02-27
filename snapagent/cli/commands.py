@@ -521,6 +521,7 @@ def gateway(
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
         compression_config=config.compression,
+        enable_event_handling=config.agents.defaults.enable_event_handling,
         consolidation_interval=config.agents.defaults.consolidation_interval,
         enable_content_tagging=config.tools.security.enable_content_tagging,
     )
@@ -690,6 +691,7 @@ def agent(
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
         compression_config=config.compression,
+        enable_event_handling=config.agents.defaults.enable_event_handling,
         consolidation_interval=config.agents.defaults.consolidation_interval,
         enable_content_tagging=config.tools.security.enable_content_tagging,
     )
@@ -1170,6 +1172,7 @@ def cron_run(
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
         compression_config=config.compression,
+        enable_event_handling=config.agents.defaults.enable_event_handling,
         consolidation_interval=config.agents.defaults.consolidation_interval,
         enable_content_tagging=config.tools.security.enable_content_tagging,
     )
