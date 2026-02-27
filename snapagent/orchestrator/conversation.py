@@ -22,6 +22,7 @@ _TOOL_DISPLAY: dict[str, tuple[str, str]] = {
     "message": ("\U0001f4ac", "Sending message"),
     "cron": ("\u23f0", "Scheduling"),
     "spawn": ("\U0001f504", "Spawning subtask"),
+    "rag_query": ("\U0001f9ea", "Fact-checking"),
 }
 
 

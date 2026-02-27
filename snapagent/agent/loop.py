@@ -17,6 +17,7 @@ from snapagent.agent.subagent import SubagentManager
 from snapagent.agent.tools.cron import CronTool
 from snapagent.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from snapagent.agent.tools.message import MessageTool
+from snapagent.agent.tools.rag import RagQueryTool
 from snapagent.agent.tools.registry import ToolRegistry
 from snapagent.agent.tools.shell import ExecTool
 from snapagent.agent.tools.spawn import SpawnTool
@@ -136,6 +137,14 @@ class AgentLoop:
         )
         self.tools.register(WebSearchTool(api_key=self.brave_api_key))
         self.tools.register(WebFetchTool())
+        self.tools.register(
+            RagQueryTool(
+                provider=self.provider,
+                model=self.model,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+        )
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
