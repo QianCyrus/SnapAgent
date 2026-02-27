@@ -1,6 +1,7 @@
 """CLI commands for SnapAgent."""
 
 import asyncio
+import json
 import os
 import select
 import signal
@@ -467,6 +468,44 @@ def _make_provider(config: Config):
     )
 
 
+def _get_observability_log_path() -> Path:
+    """Return the structured diagnostic log file path."""
+    from snapagent.config.loader import get_data_dir
+
+    return get_data_dir() / "logs" / "diagnostic.jsonl"
+
+
+def _build_observability_event_emitter():
+    """Create a DiagnosticEvent emitter that writes JSONL logs."""
+    from snapagent.observability.logging_sink import JsonlLoggingSink
+
+    sink = JsonlLoggingSink(_get_observability_log_path())
+
+    async def _emit(event) -> None:
+        await sink.emit(event)
+
+    return _emit
+
+
+def _print_log_event(event: dict, *, json_output: bool) -> None:
+    """Print one diagnostic event in text or JSON mode."""
+    if json_output:
+        print(json.dumps(event, ensure_ascii=False))
+        return
+
+    ts = event.get("ts") or "-"
+    severity = str(event.get("severity") or "info").upper()
+    name = event.get("name") or "-"
+    component = event.get("component") or "-"
+    session_key = event.get("session_key") or "-"
+    run_id = event.get("run_id") or "-"
+    status = event.get("status") or "-"
+    console.print(
+        f"{ts} [{severity}] {name} ({component}) "
+        f"session={session_key} run={run_id} status={status}"
+    )
+
+
 # ============================================================================
 # Gateway / Server
 # ============================================================================
@@ -495,7 +534,7 @@ def gateway(
     console.print(f"{__logo__} Starting {__app_name__} gateway on port {port}...")
 
     config = load_config()
-    bus = MessageBus()
+    bus = MessageBus(event_emitter=_build_observability_event_emitter())
     provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
 
@@ -663,7 +702,7 @@ def agent(
 
     config = load_config()
 
-    bus = MessageBus()
+    bus = MessageBus(event_emitter=_build_observability_event_emitter())
     provider = _make_provider(config)
 
     # Create cron service for tool usage (no callback needed for CLI unless running)
@@ -1156,7 +1195,7 @@ def cron_run(
 
     config = load_config()
     provider = _make_provider(config)
-    bus = MessageBus()
+    bus = MessageBus(event_emitter=_build_observability_event_emitter())
     agent_loop = AgentLoop(
         bus=bus,
         provider=provider,
@@ -1203,6 +1242,39 @@ def cron_run(
             _print_agent_response(result_holder[0], render_markdown=True)
     else:
         console.print(f"[red]Failed to run job {job_id}[/red]")
+
+
+# ============================================================================
+# Log Commands
+# ============================================================================
+
+
+@app.command("logs")
+def logs_command(
+    follow: bool = typer.Option(False, "--follow", "-f", help="Follow live diagnostic logs"),
+    session: str | None = typer.Option(None, "--session", help="Filter by session key"),
+    run: str | None = typer.Option(None, "--run", help="Filter by run ID"),
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSONL rows"),
+    lines: int = typer.Option(50, "--lines", "-n", min=1, help="Recent rows to show"),
+):
+    """Query or follow structured diagnostic logs."""
+    from snapagent.observability.logging_sink import JsonlLoggingSink
+
+    sink = JsonlLoggingSink(_get_observability_log_path())
+    rows = sink.query(session_key=session, run_id=run, limit=lines)
+    for row in rows:
+        _print_log_event(row, json_output=json_output)
+
+    if not follow:
+        if not rows:
+            console.print("[dim]No diagnostic logs found.[/dim]")
+        return
+
+    try:
+        for row in sink.follow(session_key=session, run_id=run):
+            _print_log_event(row, json_output=json_output)
+    except KeyboardInterrupt:
+        return
 
 
 # ============================================================================
