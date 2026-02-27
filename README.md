@@ -28,7 +28,12 @@ A lightweight personal AI assistant framework built on Python.
 
 ```bash
 git clone <repo-url>
-cd snapagent
+cd SnapAgent
+python -m venv <virtual-env-directory>
+# mac
+source <virtual-env-directory>/bin/activate
+# windows powershell
+.\\<virtual-env-directory>\\Scripts\\Activate.ps1
 pip install -e .
 ```
 
