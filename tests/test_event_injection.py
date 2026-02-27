@@ -119,6 +119,10 @@ async def test_agent_loop_checks_events_before_llm() -> None:
         and "User interrupt" in m.get("content", "")
         for m in messages
     )
+    assert any(
+        m.get("role") == "user" and "User interrupt" in str(m.get("content", ""))
+        for m in messages
+    )
 
 
 @pytest.mark.asyncio
@@ -224,3 +228,55 @@ async def test_event_published_when_active_task_exists() -> None:
     event = await bus.check_events("test:channel")
     assert event is not None
     assert "Interrupt message" in event
+
+
+@pytest.mark.asyncio
+async def test_pending_interrupt_event_is_replayed_as_follow_up() -> None:
+    """Queued interrupt events should not be dropped after the active turn ends."""
+    from pathlib import Path
+
+    from snapagent.agent.loop import AgentLoop
+    from snapagent.bus.events import InboundMessage, OutboundMessage
+    from snapagent.bus.queue import MessageBus
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.chat = AsyncMock()
+
+    with (
+        patch("snapagent.agent.loop.ContextBuilder"),
+        patch("snapagent.agent.loop.SessionManager"),
+        patch("snapagent.agent.loop.SubagentManager"),
+    ):
+        loop = AgentLoop(
+            bus=bus,
+            provider=provider,
+            workspace=Path("/tmp"),
+            enable_event_handling=True,
+        )
+
+    processed: list[str] = []
+
+    async def fake_process(msg, *args, **kwargs):
+        processed.append(msg.content)
+        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="ok")
+
+    loop._process_message = AsyncMock(side_effect=fake_process)  # type: ignore[method-assign]
+
+    inbound = InboundMessage(
+        channel="feishu",
+        sender_id="u1",
+        chat_id="c1",
+        content="original task",
+    )
+    await bus.publish_event(inbound.session_key, "interrupt A")
+    await bus.publish_event(inbound.session_key, "interrupt B")
+
+    await loop._dispatch(inbound)
+    await asyncio.sleep(0.05)
+
+    assert processed[0] == "original task"
+    assert len(processed) == 2
+    assert "interrupt A" in processed[1]
+    assert "interrupt B" in processed[1]
