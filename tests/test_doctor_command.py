@@ -90,6 +90,21 @@ async def test_doctor_cancel_disables_mode():
 
 
 @pytest.mark.asyncio
+async def test_doctor_start_shows_setup_guidance_when_provider_not_ready():
+    loop, bus, session = _make_loop()
+    loop._doctor_setup_guidance = MagicMock(return_value="setup guide")
+
+    msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/doctor")
+    await loop._handle_doctor(msg)
+
+    assert "doctor_mode" not in session.metadata
+    out = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
+    assert "precheck blocked" in out.content.lower()
+    assert "setup guide" in out.content
+    loop._dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_help_includes_doctor_commands():
     loop, _bus, _session = _make_loop()
     msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/help")

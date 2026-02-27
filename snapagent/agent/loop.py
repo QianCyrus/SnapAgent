@@ -362,6 +362,24 @@ class AgentLoop:
 
         note = text[len("/doctor") :].strip() if text.lower().startswith("/doctor") else ""
         total = await self._cancel_session_tasks(key, msg.chat_id)
+        guidance = self._doctor_setup_guidance()
+        if guidance:
+            session.metadata.pop("doctor_mode", None)
+            self.sessions.save(session)
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=(
+                        f"🩺 Doctor precheck blocked (stopped {total} task(s)).\n\n"
+                        f"{guidance}"
+                    ),
+                    run_id=run_id,
+                    turn_id=turn_id,
+                )
+            )
+            return
+
         session.metadata["doctor_mode"] = True
         self.sessions.save(session)
 
@@ -411,6 +429,47 @@ class AgentLoop:
         sub_cancelled = await self.subagents.cancel_by_session(session_key)
         self.bus.drain_progress(chat_id)
         return cancelled + sub_cancelled
+
+    def _doctor_setup_guidance(self) -> str | None:
+        """Return setup guidance when no usable model provider is configured."""
+        try:
+            from snapagent.config.loader import get_config_path, load_config
+            from snapagent.observability.health import collect_health_snapshot
+        except Exception:
+            return None
+
+        try:
+            config_path = get_config_path()
+            config = load_config()
+            snapshot = collect_health_snapshot(config=config, config_path=config_path).to_dict(deep=True)
+            provider = next(
+                (item for item in snapshot.get("evidence", []) if item.get("component") == "provider"),
+                None,
+            )
+            if not provider:
+                return None
+            if provider.get("status") in {"ok", "degraded"}:
+                return None
+
+            details = provider.get("details", {})
+            model = details.get("model") or config.agents.defaults.model
+            provider_name = details.get("provider") or config.get_provider_name(model) or "unknown"
+
+            lines = [
+                "Doctor needs a working LLM provider before diagnostics can run.",
+                f"- model: {model}",
+                f"- provider: {provider_name}",
+                "",
+                "Try one of these setup paths:",
+                "1. Codex OAuth: snapagent provider login openai-codex",
+                "2. API key config: edit ~/.snapagent/config.json -> providers.<name>.apiKey",
+                "3. Verify: snapagent health --deep --json",
+                "4. Retry in chat: /doctor",
+            ]
+            return "\n".join(lines)
+        except Exception:
+            # Setup hint should not break doctor flow.
+            return None
 
     def _cleanup_task(self, session_key: str, task: asyncio.Task) -> None:
         """Remove a completed task from active tracking."""
