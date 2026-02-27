@@ -4,18 +4,14 @@ A lightweight personal AI assistant framework built on Python.
 
 ## Changelog
 
-### v0.2 — Web Search Dedup, Workflow Optimization & Plan Mode
+### v0.2 — Web Search Dedup, Plan Mode & Workflow Optimization
 
-- **Tool call deduplication**: identical tool calls within a single agent turn are now cached and executed only once, eliminating redundant API calls and saving quota.
-- **Search loop detection**: when the agent calls `web_search` 3+ times consecutively, a system nudge is injected to stop searching and synthesize from existing results.
-- **Web research workflow**: system prompt now guides the agent through a structured PLAN → SEARCH → FETCH → SYNTHESIZE pipeline instead of open-ended searching.
-- **Fetch hint**: search results now include a `web_fetch` tip, encouraging the agent to read full page content rather than relying solely on snippets.
-- **`/plan` command**: new slash command that triggers structured task planning before execution. The agent generates a TODO-style checklist, then executes step by step. Plan detection formats output with clipboard emoji in progress messages.
-- **Plan skill** (`always: true`): teaches the agent to automatically plan for complex multi-step tasks (3+ steps, research, comparison, synthesis) even without `/plan`.
-- New modules: `snapagent/orchestrator/dedup.py`, `snapagent/skills/plan/SKILL.md`.
-- Register `/plan` in Telegram bot command menu via `set_my_commands`.
-- Add `.gitignore` rules for user data (`sessions/`, `memory/`, `*.jsonl`).
-- 20 new tests (unit + integration) covering dedup, loop detection, plan command, and plan detection.
+- **Tool call dedup**: identical tool calls within a turn are cached and executed only once.
+- **Search loop detection**: 3+ consecutive `web_search` calls trigger a system nudge to stop and synthesize.
+- **`/plan` & `/normal` mode toggle**: `/plan` switches the session to plan mode — all subsequent messages auto-generate a structured TODO-style plan before execution. `/normal` switches back to direct execution. Mode persists across messages via `session.metadata`.
+- **Plan skill** (`always: true`): teaches the agent to auto-plan for complex tasks (3+ steps, research, comparison) even in normal mode.
+- **PLAN → SEARCH → FETCH → SYNTHESIZE** workflow guidance in system prompt; search results include `web_fetch` hint.
+- New modules: `orchestrator/dedup.py`, `skills/plan/SKILL.md`. Telegram registers `/plan` and `/normal` commands.
 
 ### v0.1 — Web Search Quality & Multi-Source Fusion
 
