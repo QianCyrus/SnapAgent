@@ -40,6 +40,7 @@ def _make_loop():
 @pytest.mark.asyncio
 async def test_doctor_start_cancels_session_tasks_and_enables_mode():
     loop, bus, session = _make_loop()
+    loop._doctor_setup_guidance = MagicMock(return_value=None)
     cancelled = asyncio.Event()
 
     async def slow_task():
