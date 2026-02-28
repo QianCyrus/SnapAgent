@@ -326,6 +326,44 @@ docker compose run --rm snapagent-cli onboard
 docker compose up -d snapagent-gateway
 ```
 
+### Version Upgrade & Rollback
+
+SnapAgent supports version rollback by pinning package/image versions.
+
+**Python package (pip):**
+
+```bash
+# upgrade to latest published version
+pip install -U snapagent-ai
+
+# rollback to a known good version
+pip install "snapagent-ai==0.1.4.post2"
+```
+
+**Docker Compose (image tag):**
+
+```bash
+# default channel: stable
+SNAPAGENT_TAG=stable docker compose pull
+SNAPAGENT_TAG=stable docker compose up -d snapagent-gateway
+
+# rollback to a specific version tag
+SNAPAGENT_TAG=v0.1.4.post2 docker compose pull
+SNAPAGENT_TAG=v0.1.4.post2 docker compose up -d snapagent-gateway
+```
+
+Optional image repository override:
+
+```bash
+SNAPAGENT_IMAGE_REPO=ghcr.io/qiancyrus/snapagent SNAPAGENT_TAG=stable docker compose up -d
+```
+
+Verify the running CLI version:
+
+```bash
+snapagent --version
+```
+
 ### systemd
 
 Create `~/.config/systemd/user/snapagent-gateway.service`:
