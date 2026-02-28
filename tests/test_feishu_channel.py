@@ -40,6 +40,15 @@ def test_split_message_rejects_non_positive_max_len():
         _split_message("abc", max_len=0)
 
 
+def test_split_headings_preserves_boundary_whitespace():
+    channel = _make_channel()
+    content = "alpha\n\n# Title\n\nbeta"
+    elements = channel._split_headings(content)
+    markdown_chunks = [e["content"] for e in elements if e.get("tag") == "markdown"]
+    assert markdown_chunks[0] == "alpha\n\n"
+    assert markdown_chunks[-1] == "\n\nbeta"
+
+
 @pytest.mark.asyncio
 async def test_feishu_send_splits_long_content_into_multiple_cards():
     channel = _make_channel()

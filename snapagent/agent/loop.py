@@ -483,6 +483,7 @@ class AgentLoop:
         resume_session_id = self._get_doctor_codex_session_id(session_key) if session_key else None
         cmd = self._build_doctor_codex_command(prompt, resume_session_id=resume_session_id)
         proc: asyncio.subprocess.Process | None = None
+        stderr_task: asyncio.Task[bytes] | None = None
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -522,11 +523,14 @@ class AgentLoop:
             return final, False
 
         try:
+            if proc.stderr is not None:
+                # Drain stderr concurrently to avoid subprocess pipe backpressure deadlocks.
+                stderr_task = asyncio.create_task(proc.stderr.read())
             output, session_id = await self._read_codex_cli_output(proc.stdout)
             exit_code = await proc.wait()
             stderr_text = ""
-            if proc.stderr is not None:
-                stderr_text = (await proc.stderr.read()).decode("utf-8", "replace").strip()
+            if stderr_task is not None:
+                stderr_text = (await stderr_task).decode("utf-8", "replace").strip()
 
             if exit_code == 0:
                 final = output or "Doctor completed via Codex CLI, but no final message was captured."
@@ -558,8 +562,12 @@ class AgentLoop:
                     await asyncio.wait_for(proc.wait(), timeout=2.0)
                 except asyncio.TimeoutError:
                     proc.kill()
+            if stderr_task is not None and not stderr_task.done():
+                stderr_task.cancel()
             raise
         except Exception as e:
+            if stderr_task is not None and not stderr_task.done():
+                stderr_task.cancel()
             final = f"🩺 Doctor via Codex CLI errored: {e}"
             if publish:
                 await self.bus.publish_outbound(
@@ -1022,6 +1030,29 @@ class AgentLoop:
                     "Codex CLI doctor run failed; falling back to provider diagnostics for {}",
                     key,
                 )
+                fallback_notice = (
+                    "🩺 Codex CLI diagnostics failed; "
+                    "falling back to provider-based diagnostics.\n\n"
+                    f"{codex_final}"
+                )
+                if on_progress is not None:
+                    await on_progress(fallback_notice)
+                elif msg.channel != "cli":
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content=fallback_notice,
+                            metadata={
+                                **(msg.metadata or {}),
+                                "_progress": True,
+                                "run_id": run_id,
+                                "turn_id": turn_id,
+                            },
+                            run_id=run_id,
+                            turn_id=turn_id,
+                        )
+                    )
 
             msg = InboundMessage(
                 channel=msg.channel,

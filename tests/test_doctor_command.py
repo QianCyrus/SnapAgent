@@ -281,6 +281,48 @@ async def test_run_doctor_via_codex_cli_persists_session_id(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_doctor_via_codex_cli_returns_stderr_detail_on_failure(monkeypatch):
+    loop, _bus, _session = _make_loop()
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdout = asyncio.StreamReader()
+            self.stdout.feed_eof()
+            self.stderr = asyncio.StreamReader()
+            self.stderr.feed_data(b"auth failed")
+            self.stderr.feed_eof()
+            self.returncode = None
+
+        async def wait(self):
+            self.returncode = 2
+            return 2
+
+        def terminate(self):
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
+
+    async def _fake_spawn(*_args, **_kwargs):
+        return _FakeProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_spawn)
+
+    msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="diag")
+    final, ok = await loop._run_doctor_via_codex_cli(
+        msg=msg,
+        prompt="diag",
+        run_id="r1",
+        turn_id="t1",
+        session_key="test:c1",
+        publish=False,
+    )
+
+    assert ok is False
+    assert "auth failed" in final
+
+
+@pytest.mark.asyncio
 async def test_process_message_doctor_mode_routes_to_codex_cli():
     loop, _bus, session = _make_loop()
     session.metadata["doctor_mode"] = True
@@ -299,7 +341,7 @@ async def test_process_message_doctor_mode_routes_to_codex_cli():
 
 @pytest.mark.asyncio
 async def test_process_message_doctor_mode_falls_back_to_provider_when_codex_fails():
-    loop, _bus, session = _make_loop()
+    loop, bus, session = _make_loop()
     session.metadata["doctor_mode"] = True
     loop._doctor_cli_available = MagicMock(return_value=True)
     loop._run_doctor_via_codex_cli = AsyncMock(return_value=("codex failed", False))
@@ -318,6 +360,38 @@ async def test_process_message_doctor_mode_falls_back_to_provider_when_codex_fai
     assert result.content == "provider diag"
     loop._run_doctor_via_codex_cli.assert_awaited_once()
     loop._run_agent_loop.assert_awaited_once()
+    notice = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
+    assert "falling back to provider-based diagnostics" in notice.content
+    assert "codex failed" in notice.content
+    assert notice.metadata.get("_progress") is True
+    assert notice.metadata.get("run_id")
+    assert notice.metadata.get("turn_id")
+
+
+@pytest.mark.asyncio
+async def test_process_message_doctor_mode_fallback_uses_on_progress_callback():
+    loop, bus, session = _make_loop()
+    session.metadata["doctor_mode"] = True
+    loop._doctor_cli_available = MagicMock(return_value=True)
+    loop._run_doctor_via_codex_cli = AsyncMock(return_value=("codex failed", False))
+    loop._run_agent_loop = AsyncMock(
+        return_value=(
+            "provider diag",
+            [],
+            [{"role": "assistant", "content": "provider diag"}],
+        )
+    )
+    on_progress = AsyncMock(return_value=None)
+
+    msg = InboundMessage(channel="cli", sender_id="u1", chat_id="c1", content="check logs")
+    result = await loop._process_message(msg, on_progress=on_progress)
+
+    assert result is not None
+    assert result.content == "provider diag"
+    on_progress.assert_awaited()
+    assert "falling back to provider-based diagnostics" in on_progress.await_args.args[0]
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(bus.consume_outbound(), timeout=0.05)
 
 
 @pytest.mark.asyncio

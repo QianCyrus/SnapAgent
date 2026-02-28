@@ -488,8 +488,8 @@ class FeishuChannel(BaseChannel):
         elements = []
         last_end = 0
         for m in self._HEADING_RE.finditer(protected):
-            before = protected[last_end : m.start()].strip()
-            if before:
+            before = protected[last_end : m.start()]
+            if before.strip():
                 elements.append({"tag": "markdown", "content": before})
             text = m.group(2).strip()
             elements.append(
@@ -502,8 +502,8 @@ class FeishuChannel(BaseChannel):
                 }
             )
             last_end = m.end()
-        remaining = protected[last_end:].strip()
-        if remaining:
+        remaining = protected[last_end:]
+        if remaining.strip():
             elements.append({"tag": "markdown", "content": remaining})
 
         for i, cb in enumerate(code_blocks):
@@ -789,7 +789,8 @@ class FeishuChannel(BaseChannel):
                         )
 
             if msg.content and msg.content.strip():
-                for chunk in _split_message(msg.content):
+                chunks = _split_message(msg.content)
+                for chunk in chunks:
                     card = {
                         "config": {"wide_screen_mode": True},
                         "elements": self._build_card_elements(chunk),
