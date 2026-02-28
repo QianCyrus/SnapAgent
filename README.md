@@ -4,6 +4,14 @@ A lightweight personal AI assistant framework built on Python.
 
 ## Changelog
 
+### v0.4 — Observability Surfaces & Doctor Mode
+
+- **Event Backbone (Track 0)**: standardized diagnostic events with `session_key` / `run_id` / `turn_id`.
+- **Health Surface (Track 1)**: machine-readable health/readiness snapshots (`health`, `status --deep --json`).
+- **Logging Surface (Track 2)**: structured diagnostic logs with session/run filters and follow mode.
+- **Doctor Surface**: chat-driven diagnosis commands (`/doctor`, `/doctor status`, `/doctor cancel`, `/doctor resume`) with provider precheck guidance and evidence-first diagnostics through `doctor_check`.
+- Architecture doc: [`docs/architecture/doctor-observability-architecture.md`](docs/architecture/doctor-observability-architecture.md).
+
 ### v0.3 — ReAct Core, Prompt Security & Async Interrupt Handling
 
 - **ReAct tracing core**: orchestrator now records thought/action/observation style steps with stronger iteration-cap handling.
@@ -321,9 +329,97 @@ docker run -v ~/.snapagent:/root/.snapagent -p 18790:18790 snapagent gateway
 
 ### Docker Compose
 
+Prebuilt image channel (`stable` by default):
+
 ```bash
 docker compose run --rm snapagent-cli onboard
 docker compose up -d snapagent-gateway
+```
+
+Local source build (development profile):
+
+```bash
+docker compose --profile build run --rm snapagent-cli-dev onboard
+docker compose --profile build up -d snapagent-gateway-dev
+```
+
+### Release Trigger Flow
+
+SnapAgent release automation has two trigger paths:
+
+1. **Merge to `release` branch**
+- Triggers `CI` + `Release` workflows.
+- Runs shared quality checks (lint + tests).
+- Publishes canary images (`canary-<sha>`, `sha-<sha>`, `canary`).
+- Does **not** publish stable package/channel.
+
+2. **Push version tag `v*` (for example `v0.1.4.post3`)**
+- Triggers tag release path (`guard_tag`, `pypi`, `docker_stable`).
+- Tag must be newly created (non-force), on `release` lineage, and match `pyproject.toml` version.
+- Publishes immutable artifacts (`snapagent-ai==X.Y.Z` and image `vX.Y.Z`).
+- Promotes `stable/latest` only when this tag is the latest `v*` tag on `release` history.
+
+Who creates tags:
+- Maintainers/release owners create and push tags.
+- End users do **not** create tags.
+
+How maintainers create a release tag (local git, recommended):
+
+1. Confirm `pyproject.toml` version is the version you want to release.
+2. Sync latest `release` branch.
+3. Create a `v*` tag on that commit.
+4. Push the tag to origin (this triggers stable release).
+
+```bash
+git checkout release
+git pull origin release
+git tag v0.1.4.post3
+git push origin v0.1.4.post3
+```
+
+Alternative (GitHub Web UI):
+
+1. Open the repository `Releases` page.
+2. Click `Draft a new release`.
+3. Create/select tag `v0.1.4.post3` on `release` branch commit.
+4. Publish release (or create tag) to trigger the tag workflow.
+
+### Version Upgrade & Rollback
+
+SnapAgent supports version rollback by pinning package/image versions.
+
+**Python package (pip):**
+
+```bash
+# upgrade to latest published version
+pip install -U snapagent-ai
+
+# rollback to a known good version
+pip install "snapagent-ai==0.1.4.post2"
+```
+
+**Docker Compose (image tag):**
+
+```bash
+# default channel: stable
+SNAPAGENT_TAG=stable docker compose pull
+SNAPAGENT_TAG=stable docker compose up -d snapagent-gateway
+
+# rollback to a specific version tag
+SNAPAGENT_TAG=v0.1.4.post2 docker compose pull
+SNAPAGENT_TAG=v0.1.4.post2 docker compose up -d snapagent-gateway
+```
+
+Optional image repository override:
+
+```bash
+SNAPAGENT_IMAGE_REPO=ghcr.io/qiancyrus/snapagent SNAPAGENT_TAG=stable docker compose up -d
+```
+
+Verify the running CLI version:
+
+```bash
+snapagent --version
 ```
 
 ### systemd
@@ -378,6 +474,15 @@ User Message → [Channel] → [MessageBus] → [AgentLoop] → [ConversationOrc
 | **ChannelManager** | `channels/manager.py` | Channel lifecycle + outbound message routing |
 | **SubagentManager** | `agent/subagent.py` | Background sub-task execution |
 | **ProviderRegistry** | `providers/registry.py` | Provider metadata (17 specs) |
+
+### Observability And Doctor
+
+See [`docs/architecture/doctor-observability-architecture.md`](docs/architecture/doctor-observability-architecture.md) for the full design of:
+
+- Event Backbone (Track 0)
+- Health Surface (Track 1)
+- Logging Surface (Track 2)
+- Doctor Surface (Codex-driven diagnosis)
 
 ## Project Structure
 

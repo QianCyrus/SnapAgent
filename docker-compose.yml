@@ -1,4 +1,9 @@
-x-common-config: &common-config
+x-runtime-config: &runtime-config
+  image: ${SNAPAGENT_IMAGE_REPO:-ghcr.io/qiancyrus/snapagent}:${SNAPAGENT_TAG:-stable}
+  volumes:
+    - ~/.snapagent:/root/.snapagent
+
+x-build-config: &build-config
   build:
     context: .
     dockerfile: Dockerfile
@@ -8,7 +13,7 @@ x-common-config: &common-config
 services:
   snapagent-gateway:
     container_name: snapagent-gateway
-    <<: *common-config
+    <<: *runtime-config
     command: ["gateway"]
     restart: unless-stopped
     ports:
@@ -23,8 +28,27 @@ services:
           memory: 256M
   
   snapagent-cli:
-    <<: *common-config
+    <<: *runtime-config
     profiles:
+      - cli
+    command: ["status"]
+    stdin_open: true
+    tty: true
+
+  snapagent-gateway-dev:
+    container_name: snapagent-gateway-dev
+    <<: *build-config
+    profiles:
+      - build
+    command: ["gateway"]
+    restart: unless-stopped
+    ports:
+      - 18791:18790
+
+  snapagent-cli-dev:
+    <<: *build-config
+    profiles:
+      - build
       - cli
     command: ["status"]
     stdin_open: true
