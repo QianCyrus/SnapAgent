@@ -129,6 +129,7 @@ async def test_doctor_cancel_disables_mode():
 async def test_doctor_start_shows_setup_guidance_when_provider_not_ready():
     loop, bus, session = _make_loop()
     loop._doctor_setup_guidance = MagicMock(return_value="setup guide")
+    loop._doctor_cli_available = MagicMock(return_value=False)
 
     msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/doctor")
     await loop._handle_doctor(msg)
@@ -138,6 +139,23 @@ async def test_doctor_start_shows_setup_guidance_when_provider_not_ready():
     assert "precheck blocked" in out.content.lower()
     assert "setup guide" in out.content
     loop._dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_doctor_start_skips_setup_guidance_when_codex_cli_available():
+    loop, _bus, session = _make_loop()
+    loop._doctor_setup_guidance = MagicMock(return_value="setup guide")
+    loop._doctor_cli_available = MagicMock(return_value=True)
+    loop._run_doctor_via_codex_cli = AsyncMock(return_value=None)
+
+    msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/doctor")
+    await loop._handle_doctor(msg)
+    await asyncio.sleep(0)
+
+    assert session.metadata.get("doctor_mode") is True
+    loop._doctor_setup_guidance.assert_not_called()
+    loop._run_doctor_via_codex_cli.assert_awaited_once()
+    loop._dispatch.assert_not_awaited()
 
 
 @pytest.mark.asyncio

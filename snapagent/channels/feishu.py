@@ -46,6 +46,51 @@ MSG_TYPE_MAP = {
     "sticker": "[sticker]",
 }
 
+FEISHU_CARD_CHUNK_MAX_LEN = 2000
+
+
+def _split_message(content: str, max_len: int = FEISHU_CARD_CHUNK_MAX_LEN) -> list[str]:
+    """Split content into chunks within max_len, preferring paragraph and line breaks."""
+    if not content:
+        return []
+    if len(content) <= max_len:
+        return [content]
+
+    chunks: list[str] = []
+    remaining = content
+    while remaining:
+        if len(remaining) <= max_len:
+            chunks.append(remaining)
+            break
+
+        cut = remaining[:max_len]
+        sep_len = 0
+        pos = cut.rfind("\n\n")
+        if pos > 0:
+            sep_len = 2
+        if pos <= 0:
+            pos = cut.rfind("\n")
+            if pos > 0:
+                sep_len = 1
+        if pos <= 0:
+            pos = cut.rfind(" ")
+            if pos > 0:
+                sep_len = 1
+        if pos <= 0:
+            pos = max_len
+            sep_len = 0
+        else:
+            pos += sep_len
+
+        chunk = remaining[:pos]
+        if not chunk:
+            pos = max_len
+            chunk = remaining[:pos]
+
+        chunks.append(chunk)
+        remaining = remaining[pos:]
+    return chunks
+
 
 def _extract_share_card_content(content_json: dict, msg_type: str) -> str:
     """Extract text representation from share cards and interactive messages."""
@@ -709,18 +754,19 @@ class FeishuChannel(BaseChannel):
                         )
 
             if msg.content and msg.content.strip():
-                card = {
-                    "config": {"wide_screen_mode": True},
-                    "elements": self._build_card_elements(msg.content),
-                }
-                await loop.run_in_executor(
-                    None,
-                    self._send_message_sync,
-                    receive_id_type,
-                    msg.chat_id,
-                    "interactive",
-                    json.dumps(card, ensure_ascii=False),
-                )
+                for chunk in _split_message(msg.content):
+                    card = {
+                        "config": {"wide_screen_mode": True},
+                        "elements": self._build_card_elements(chunk),
+                    }
+                    await loop.run_in_executor(
+                        None,
+                        self._send_message_sync,
+                        receive_id_type,
+                        msg.chat_id,
+                        "interactive",
+                        json.dumps(card, ensure_ascii=False),
+                    )
 
         except Exception as e:
             logger.error("Error sending Feishu message: {}", e)

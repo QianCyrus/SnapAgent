@@ -369,7 +369,8 @@ class AgentLoop:
         note = text[len("/doctor") :].strip() if text.lower().startswith("/doctor") else ""
         total = await self._cancel_session_tasks(key, msg.chat_id)
         session.metadata.pop("doctor_codex_session_id", None)
-        guidance = self._doctor_setup_guidance()
+        doctor_cli_available = self._doctor_cli_available()
+        guidance = None if doctor_cli_available else self._doctor_setup_guidance()
         if guidance:
             session.metadata.pop("doctor_mode", None)
             self.sessions.save(session)
@@ -404,7 +405,7 @@ class AgentLoop:
             "Please self-diagnose this session. Collect evidence with doctor_check "
             "(health/status/logs/events) before conclusions."
         )
-        if self._doctor_cli_available():
+        if doctor_cli_available:
             task = asyncio.create_task(
                 self._run_doctor_via_codex_cli(
                     msg=msg,
