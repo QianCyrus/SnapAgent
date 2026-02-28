@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  push:
+    branches: [release]
+    tags: ["v*"]
+
+jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+
+  guard_tag:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [quality]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure tag commit belongs to release branch history
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event.created }}" != "true" ]]; then
+            echo "Version tags must be newly created refs."
+            exit 1
+          fi
+
+          if [[ "${{ github.event.forced }}" == "true" ]]; then
+            echo "Force-updated version tags are not allowed."
+            exit 1
+          fi
+
+          git fetch origin release --depth=1
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/release"; then
+            echo "Tag commit ${GITHUB_SHA} is not on release branch history."
+            exit 1
+          fi
+
+  pypi:
+    runs-on: ubuntu-latest
+    needs: [quality, guard_tag]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Ensure PYPI_API_TOKEN exists
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PYPI_API_TOKEN}" ]]; then
+            echo "PYPI_API_TOKEN is required for version tag releases."
+            exit 1
+          fi
+
+      - name: Validate tag matches pyproject version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/v}"
+          version="$(python - <<'PY'
+          import pathlib
+          import tomllib
+
+          data = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+          print(data["project"]["version"])
+          PY
+          )"
+
+          if [[ "${version}" != "${tag}" ]]; then
+            echo "Tag version (${tag}) does not match pyproject version (${version})"
+            exit 1
+          fi
+
+      - name: Build package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+          python -m build
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: python -m twine upload --skip-existing dist/*
+
+  docker_canary:
+    runs-on: ubuntu-latest
+    needs: [quality]
+    if: github.ref == 'refs/heads/release'
+    concurrency:
+      group: release-canary-channel
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve canary image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/${owner}/snapagent"
+          short_sha="${GITHUB_SHA::7}"
+          {
+            echo "tags<<EOF"
+            echo "${image}:canary-${short_sha}"
+            echo "${image}:sha-${short_sha}"
+            echo "${image}:canary"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push canary image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+
+  docker_stable:
+    runs-on: ubuntu-latest
+    needs: [quality, guard_tag, pypi]
+    if: startsWith(github.ref, 'refs/tags/v')
+    concurrency:
+      group: release-stable-channel
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decide stable channel promotion
+        id: channel
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          git fetch origin release --depth=1
+
+          current_tag="${GITHUB_REF#refs/tags/}"
+          latest_tag="$(git tag --merged origin/release --list 'v*' | sort -V | tail -n 1)"
+
+          if [[ "${current_tag}" == "${latest_tag}" ]]; then
+            echo "promote_channel=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "promote_channel=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Resolve stable image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          image="ghcr.io/${owner}/snapagent"
+          version_tag="${GITHUB_REF#refs/tags/}"
+          promote_channel="${{ steps.channel.outputs.promote_channel }}"
+          {
+            echo "tags<<EOF"
+            echo "${image}:${version_tag}"
+            if [[ "${promote_channel}" == "true" ]]; then
+              echo "${image}:stable"
+              echo "${image}:latest"
+            fi
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push stable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}

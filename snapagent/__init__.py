@@ -1,5 +1,10 @@
 """SnapAgent - A lightweight AI agent framework."""
 
-__version__ = "0.1.4.post3"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("snapagent-ai")
+except PackageNotFoundError:
+    __version__ = "0.0.0+local"
 __logo__ = "🐈"
 __app_name__ = "SnapAgent"
