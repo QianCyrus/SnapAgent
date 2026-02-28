@@ -1,4 +1,5 @@
 x-common-config: &common-config
+  image: ${SNAPAGENT_IMAGE_REPO:-ghcr.io/qiancyrus/snapagent}:${SNAPAGENT_TAG:-stable}
   build:
     context: .
     dockerfile: Dockerfile
