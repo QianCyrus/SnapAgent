@@ -359,6 +359,15 @@ SnapAgent release automation has two trigger paths:
 - Publishes immutable artifacts (`snapagent-ai==X.Y.Z` and image `vX.Y.Z`).
 - Promotes `stable/latest` only when this tag is the latest `v*` tag on `release` history.
 
+Who creates tags:
+- Maintainers/release owners create and push tags.
+- End users do **not** create tags.
+- End users only install `stable` or pin an existing released version.
+
+Where to create tags:
+- Local git (recommended) in this repository.
+- Or GitHub web UI when creating a new release/tag.
+
 Tag release example:
 
 ```bash
