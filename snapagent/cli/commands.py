@@ -1,6 +1,7 @@
 """CLI commands for SnapAgent."""
 
 import asyncio
+import inspect
 import json
 import os
 import select
@@ -520,8 +521,17 @@ def _make_unconfigured_provider(config: Config):
 
 def _build_agent_provider(config: Config, initial_message: str | None):
     """Build provider, allowing /doctor to run prechecks even when auth is missing."""
+    def _call_make_provider(*, emit_errors: bool):
+        try:
+            params = inspect.signature(_make_provider).parameters
+        except (TypeError, ValueError):
+            params = {}
+        if "emit_errors" in params:
+            return _make_provider(config, emit_errors=emit_errors)
+        return _make_provider(config)
+
     try:
-        return _make_provider(config, emit_errors=not _is_doctor_command(initial_message))
+        return _call_make_provider(emit_errors=not _is_doctor_command(initial_message))
     except typer.Exit:
         if _is_doctor_command(initial_message):
             return _make_unconfigured_provider(config)
