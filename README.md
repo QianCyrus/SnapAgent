@@ -343,6 +343,31 @@ docker compose --profile build run --rm snapagent-cli-dev onboard
 docker compose --profile build up -d snapagent-gateway-dev
 ```
 
+### Release Trigger Flow
+
+SnapAgent release automation has two trigger paths:
+
+1. **Merge to `release` branch**
+- Triggers `CI` + `Release` workflows.
+- Runs shared quality checks (lint + tests).
+- Publishes canary images (`canary-<sha>`, `sha-<sha>`, `canary`).
+- Does **not** publish stable package/channel.
+
+2. **Push version tag `v*` (for example `v0.1.4.post3`)**
+- Triggers tag release path (`guard_tag`, `pypi`, `docker_stable`).
+- Tag must be newly created (non-force), on `release` lineage, and match `pyproject.toml` version.
+- Publishes immutable artifacts (`snapagent-ai==X.Y.Z` and image `vX.Y.Z`).
+- Promotes `stable/latest` only when this tag is the latest `v*` tag on `release` history.
+
+Tag release example:
+
+```bash
+git checkout release
+git pull
+git tag v0.1.4.post3
+git push origin v0.1.4.post3
+```
+
 ### Version Upgrade & Rollback
 
 SnapAgent supports version rollback by pinning package/image versions.
