@@ -35,6 +35,8 @@ Thumbs.db
 
 # Project-specific
 .assets/
+.worktrees/
+worktrees/
 
 # User data — sessions, memory, history (never commit)
 sessions/
