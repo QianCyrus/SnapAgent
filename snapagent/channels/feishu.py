@@ -260,7 +260,7 @@ class FeishuChannel(BaseChannel):
 
     name = "feishu"
 
-    def __init__(self, config: FeishuConfig, bus: MessageBus):
+    def __init__(self, config: FeishuConfig, bus: MessageBus, *, workspace: Path | None = None):
         super().__init__(config, bus)
         self.config: FeishuConfig = config
         self._client: Any = None
@@ -268,6 +268,7 @@ class FeishuChannel(BaseChannel):
         self._ws_thread: threading.Thread | None = None
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()  # Ordered dedup cache
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._workspace = workspace.expanduser().resolve() if workspace else None
 
     async def start(self) -> None:
         """Start the Feishu bot with WebSocket long connection."""
@@ -669,6 +670,38 @@ class FeishuChannel(BaseChannel):
             logger.error("Error sending Feishu {} message: {}", msg_type, e)
             return False
 
+    def _resolve_media_path(self, file_path: str) -> str | None:
+        """Resolve attachment path to an existing file path."""
+        requested = Path(file_path).expanduser()
+        candidates: list[Path] = []
+
+        if requested.is_absolute():
+            candidates.append(requested)
+        else:
+            # Prefer workspace-relative resolution because tools run in workspace context.
+            if self._workspace:
+                candidates.append(self._workspace / requested)
+            candidates.append(Path.cwd() / requested)
+
+        attempted: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            resolved = str(candidate.resolve(strict=False))
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            attempted.append(resolved)
+            if Path(resolved).is_file():
+                if resolved != file_path:
+                    logger.debug("Resolved media path {} -> {}", file_path, resolved)
+                return resolved
+
+        if attempted:
+            logger.warning("Media file not found: {} (tried: {})", file_path, ", ".join(attempted))
+        else:
+            logger.warning("Media file not found: {}", file_path)
+        return None
+
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Feishu, including media (images/files) if present."""
         if not self._client:
@@ -680,12 +713,12 @@ class FeishuChannel(BaseChannel):
             loop = asyncio.get_running_loop()
 
             for file_path in msg.media:
-                if not os.path.isfile(file_path):
-                    logger.warning("Media file not found: {}", file_path)
+                resolved_path = self._resolve_media_path(file_path)
+                if not resolved_path:
                     continue
-                ext = os.path.splitext(file_path)[1].lower()
+                ext = os.path.splitext(resolved_path)[1].lower()
                 if ext in self._IMAGE_EXTS:
-                    key = await loop.run_in_executor(None, self._upload_image_sync, file_path)
+                    key = await loop.run_in_executor(None, self._upload_image_sync, resolved_path)
                     if key:
                         await loop.run_in_executor(
                             None,
@@ -696,7 +729,7 @@ class FeishuChannel(BaseChannel):
                             json.dumps({"image_key": key}, ensure_ascii=False),
                         )
                 else:
-                    key = await loop.run_in_executor(None, self._upload_file_sync, file_path)
+                    key = await loop.run_in_executor(None, self._upload_file_sync, resolved_path)
                     if key:
                         media_type = "audio" if ext in self._AUDIO_EXTS else "file"
                         await loop.run_in_executor(
