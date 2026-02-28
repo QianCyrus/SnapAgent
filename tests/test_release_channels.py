@@ -22,6 +22,8 @@ def test_tag_release_has_release_branch_guard():
     )
     assert "merge-base --is-ancestor" in runs
     assert "origin/release" in runs
+    assert "github.event.created" in runs
+    assert "github.event.forced" in runs
 
 
 def test_stable_docker_publish_waits_for_pypi_publish():
@@ -31,7 +33,7 @@ def test_stable_docker_publish_waits_for_pypi_publish():
 
     assert canary_job["if"] == "github.ref == 'refs/heads/release'"
     assert stable_job["if"] == "startsWith(github.ref, 'refs/tags/v')"
-    assert set(stable_job["needs"]) >= {"test", "guard_tag", "pypi"}
+    assert set(stable_job["needs"]) >= {"quality", "guard_tag", "pypi"}
 
 
 def test_pypi_publish_is_rerun_safe():
@@ -66,16 +68,16 @@ def test_ghcr_owner_is_normalized_to_lowercase():
     assert "${GITHUB_REPOSITORY_OWNER,,}" in stable_runs
 
 
-def test_release_publish_jobs_are_gated_by_lint():
+def test_release_publish_jobs_are_gated_by_quality_workflow():
     workflow = _load_yaml(".github/workflows/release.yml")
     jobs = workflow["jobs"]
 
-    assert "lint" in jobs
-    assert "lint" in jobs["test"]["needs"]
-    assert "lint" in jobs["guard_tag"]["needs"]
-    assert "lint" in jobs["pypi"]["needs"]
-    assert "lint" in jobs["docker_canary"]["needs"]
-    assert "lint" in jobs["docker_stable"]["needs"]
+    assert "quality" in jobs
+    assert jobs["quality"]["uses"] == "./.github/workflows/quality.yml"
+    assert "quality" in jobs["guard_tag"]["needs"]
+    assert "quality" in jobs["pypi"]["needs"]
+    assert "quality" in jobs["docker_canary"]["needs"]
+    assert "quality" in jobs["docker_stable"]["needs"]
 
 
 def test_canary_channel_has_concurrency_control():
@@ -98,7 +100,7 @@ def test_stable_channel_has_concurrency_and_latest_tag_gate():
         for step in stable_job["steps"]
         if isinstance(step, dict)
     )
-    assert "git tag --list 'v*' | sort -V | tail -n 1" in runs
+    assert "git tag --merged origin/release --list 'v*' | sort -V | tail -n 1" in runs
     assert "promote_channel=true" in runs
     assert "promote_channel=false" in runs
     assert 'if [[ "${promote_channel}" == "true" ]]; then' in runs
@@ -109,6 +111,14 @@ def test_dev_dependencies_include_yaml_parser():
     dev_deps = pyproject["project"]["optional-dependencies"]["dev"]
 
     assert any(dep.lower().startswith("pyyaml") for dep in dev_deps)
+
+
+def test_ci_workflow_reuses_quality_workflow():
+    ci_workflow = _load_yaml(".github/workflows/ci.yml")
+    ci_jobs = ci_workflow["jobs"]
+
+    assert "quality" in ci_jobs
+    assert ci_jobs["quality"]["uses"] == "./.github/workflows/quality.yml"
 
 
 def test_compose_production_services_are_image_only():
