@@ -115,6 +115,31 @@ def _resolve_provider_auth(
     return has_auth, auth_source
 
 
+def _resolve_oauth_provider_auth(provider_name: str | None) -> tuple[bool, str]:
+    """Check whether OAuth provider credentials are locally available."""
+    if provider_name != "openai_codex":
+        return True, "oauth:provider-selected"
+
+    try:
+        from oauth_cli_kit.providers import OPENAI_CODEX_PROVIDER
+        from oauth_cli_kit.storage import FileTokenStorage
+    except Exception:
+        return False, "oauth:runtime-unavailable"
+
+    try:
+        storage = FileTokenStorage(token_filename=OPENAI_CODEX_PROVIDER.token_filename)
+        token = storage.load()
+    except Exception:
+        return False, "oauth:token-load-failed"
+
+    has_auth = bool(
+        token
+        and _has_value(getattr(token, "access", ""))
+        and _has_value(getattr(token, "refresh", ""))
+    )
+    return (has_auth, "oauth:token-file" if has_auth else "oauth:missing")
+
+
 def _provider_evidence(config: Config) -> HealthEvidence:
     model = config.agents.defaults.model
     provider_name = config.get_provider_name(model)
@@ -139,10 +164,21 @@ def _provider_evidence(config: Config) -> HealthEvidence:
     )
 
     if spec and spec.is_oauth:
+        has_auth, auth_source = _resolve_oauth_provider_auth(provider_name)
+        details["has_auth"] = has_auth
+        if auth_source:
+            details["auth_source"] = auth_source
+        if has_auth:
+            return HealthEvidence(
+                component="provider",
+                status="ok",
+                summary=f"OAuth provider selected: {provider_name}",
+                details=details,
+            )
         return HealthEvidence(
             component="provider",
-            status="ok",
-            summary=f"OAuth provider selected: {provider_name}",
+            status="failed",
+            summary=f"OAuth provider missing credentials: {provider_name}",
             details=details,
         )
 

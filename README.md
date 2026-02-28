@@ -4,6 +4,14 @@ A lightweight personal AI assistant framework built on Python.
 
 ## Changelog
 
+### v0.4 — Observability Surfaces & Doctor Mode
+
+- **Event Backbone (Track 0)**: standardized diagnostic events with `session_key` / `run_id` / `turn_id`.
+- **Health Surface (Track 1)**: machine-readable health/readiness snapshots (`health`, `status --deep --json`).
+- **Logging Surface (Track 2)**: structured diagnostic logs with session/run filters and follow mode.
+- **Doctor Surface**: chat-driven diagnosis commands (`/doctor`, `/doctor status`, `/doctor cancel`, `/doctor resume`) with provider precheck guidance and evidence-first diagnostics through `doctor_check`.
+- Architecture doc: [`docs/architecture/doctor-observability-architecture.md`](docs/architecture/doctor-observability-architecture.md).
+
 ### v0.3 — ReAct Core, Prompt Security & Async Interrupt Handling
 
 - **ReAct tracing core**: orchestrator now records thought/action/observation style steps with stronger iteration-cap handling.
@@ -425,6 +433,15 @@ User Message → [Channel] → [MessageBus] → [AgentLoop] → [ConversationOrc
 | **ChannelManager** | `channels/manager.py` | Channel lifecycle + outbound message routing |
 | **SubagentManager** | `agent/subagent.py` | Background sub-task execution |
 | **ProviderRegistry** | `providers/registry.py` | Provider metadata (17 specs) |
+
+### Observability And Doctor
+
+See [`docs/architecture/doctor-observability-architecture.md`](docs/architecture/doctor-observability-architecture.md) for the full design of:
+
+- Event Backbone (Track 0)
+- Health Surface (Track 1)
+- Logging Surface (Track 2)
+- Doctor Surface (Codex-driven diagnosis)
 
 ## Project Structure
 
