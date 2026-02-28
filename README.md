@@ -362,20 +362,27 @@ SnapAgent release automation has two trigger paths:
 Who creates tags:
 - Maintainers/release owners create and push tags.
 - End users do **not** create tags.
-- End users only install `stable` or pin an existing released version.
 
-Where to create tags:
-- Local git (recommended) in this repository.
-- Or GitHub web UI when creating a new release/tag.
+How maintainers create a release tag (local git, recommended):
 
-Tag release example:
+1. Confirm `pyproject.toml` version is the version you want to release.
+2. Sync latest `release` branch.
+3. Create a `v*` tag on that commit.
+4. Push the tag to origin (this triggers stable release).
 
 ```bash
 git checkout release
-git pull
+git pull origin release
 git tag v0.1.4.post3
 git push origin v0.1.4.post3
 ```
+
+Alternative (GitHub Web UI):
+
+1. Open the repository `Releases` page.
+2. Click `Draft a new release`.
+3. Create/select tag `v0.1.4.post3` on `release` branch commit.
+4. Publish release (or create tag) to trigger the tag workflow.
 
 ### Version Upgrade & Rollback
 
