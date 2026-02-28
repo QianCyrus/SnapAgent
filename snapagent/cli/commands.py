@@ -115,6 +115,38 @@ def _is_exit_command(command: str) -> bool:
     return command.lower() in EXIT_COMMANDS
 
 
+def _command_head(text: str | None) -> tuple[str, str]:
+    """Return normalized command head and trailing args."""
+    raw = (text or "").strip()
+    if not raw:
+        return "", ""
+    parts = raw.split(maxsplit=1)
+    head = parts[0].lower()
+    tail = parts[1].strip().lower() if len(parts) > 1 else ""
+    return head, tail
+
+
+def _is_doctor_command(text: str | None) -> bool:
+    head, _tail = _command_head(text)
+    return head == "/doctor"
+
+
+def _is_doctor_start_command(text: str | None) -> bool:
+    head, tail = _command_head(text)
+    if head != "/doctor":
+        return False
+    action = tail.split(maxsplit=1)[0] if tail else ""
+    return action not in {"status", "cancel", "resume"}
+
+
+def _is_doctor_mode_on_notice(text: str | None) -> bool:
+    return "doctor mode on" in (text or "").lower()
+
+
+def _should_wait_for_doctor_followup(initial_message: str | None, first_response: str | None) -> bool:
+    return _is_doctor_start_command(initial_message) and _is_doctor_mode_on_notice(first_response)
+
+
 async def _read_interactive_input_async() -> str:
     """Read user input using prompt_toolkit (handles paste, history, display).
 
@@ -396,7 +428,7 @@ def _create_workspace_templates(workspace: Path):
     (workspace / "skills").mkdir(exist_ok=True)
 
 
-def _make_provider(config: Config):
+def _make_provider(config: Config, *, emit_errors: bool = True):
     """Create the appropriate LLM provider from config."""
     from snapagent.providers.custom_provider import CustomProvider
     from snapagent.providers.litellm_provider import LiteLLMProvider
@@ -420,9 +452,10 @@ def _make_provider(config: Config):
                     custom_api_key = val
                     break
         if not custom_api_key:
-            console.print("[red]Error: No API key configured for custom provider.[/red]")
-            console.print("Set providers.custom.apiKey in ~/.snapagent/config.json")
-            console.print("or export SNAPAGENT_API_KEY / OPENAI_API_KEY")
+            if emit_errors:
+                console.print("[red]Error: No API key configured for custom provider.[/red]")
+                console.print("Set providers.custom.apiKey in ~/.snapagent/config.json")
+                console.print("or export SNAPAGENT_API_KEY / OPENAI_API_KEY")
             raise typer.Exit(1)
 
         return CustomProvider(
@@ -451,12 +484,13 @@ def _make_provider(config: Config):
                 break
 
     if not model.startswith("bedrock/") and not resolved_api_key and not (spec and spec.is_oauth):
-        console.print("[red]Error: No API key configured.[/red]")
-        if provider_name == "anthropic":
-            console.print("Set providers.anthropic.apiKey in ~/.snapagent/config.json")
-            console.print("or export ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY")
-        else:
-            console.print("Set one in ~/.snapagent/config.json under providers section")
+        if emit_errors:
+            console.print("[red]Error: No API key configured.[/red]")
+            if provider_name == "anthropic":
+                console.print("Set providers.anthropic.apiKey in ~/.snapagent/config.json")
+                console.print("or export ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY")
+            else:
+                console.print("Set one in ~/.snapagent/config.json under providers section")
         raise typer.Exit(1)
 
     return LiteLLMProvider(
@@ -466,6 +500,32 @@ def _make_provider(config: Config):
         extra_headers=p.extra_headers if p else None,
         provider_name=provider_name,
     )
+
+
+def _make_unconfigured_provider(config: Config):
+    """Create a provider without auth for preflight-only flows like /doctor."""
+    from snapagent.providers.litellm_provider import LiteLLMProvider
+
+    model = config.agents.defaults.model
+    provider_name = config.get_provider_name(model) or config.agents.defaults.provider
+    p = config.get_provider(model)
+    return LiteLLMProvider(
+        api_key=None,
+        api_base=config.get_api_base(model),
+        default_model=model,
+        extra_headers=p.extra_headers if p else None,
+        provider_name=provider_name,
+    )
+
+
+def _build_agent_provider(config: Config, initial_message: str | None):
+    """Build provider, allowing /doctor to run prechecks even when auth is missing."""
+    try:
+        return _make_provider(config, emit_errors=not _is_doctor_command(initial_message))
+    except typer.Exit:
+        if _is_doctor_command(initial_message):
+            return _make_unconfigured_provider(config)
+        raise
 
 
 def _get_observability_log_path() -> Path:
@@ -703,7 +763,7 @@ def agent(
     config = load_config()
 
     bus = MessageBus(event_emitter=_build_observability_event_emitter())
-    provider = _make_provider(config)
+    provider = _build_agent_provider(config, message)
 
     # Create cron service for tool usage (no callback needed for CLI unless running)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
@@ -765,6 +825,15 @@ def agent(
         async def run_once():
             bus_task = asyncio.create_task(agent_loop.run())
             response = ""
+            session_key = f"{cli_channel}:{cli_chat_id}"
+
+            def _doctor_task_running() -> bool:
+                tasks = getattr(agent_loop, "_doctor_tasks", None)
+                if not isinstance(tasks, dict):
+                    return False
+                task = tasks.get(session_key)
+                return bool(task and not task.done())
+
             try:
                 await bus.publish_inbound(
                     InboundMessage(
@@ -776,10 +845,20 @@ def agent(
                 )
 
                 with _thinking_ctx():
+                    wait_for_follow_up = False
                     while True:
-                        msg = await bus.consume_outbound()
-                        if msg.metadata.get("_progress"):
-                            is_tool_hint = msg.metadata.get("_tool_hint", False)
+                        try:
+                            if wait_for_follow_up:
+                                msg = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
+                            else:
+                                msg = await bus.consume_outbound()
+                        except asyncio.TimeoutError:
+                            if wait_for_follow_up and _doctor_task_running():
+                                continue
+                            break
+                        metadata = msg.metadata or {}
+                        if metadata.get("_progress"):
+                            is_tool_hint = metadata.get("_tool_hint", False)
                             ch = agent_loop.channels_config
                             if ch and is_tool_hint and not ch.send_tool_hints:
                                 continue
@@ -788,6 +867,11 @@ def agent(
                             console.print(f"  [dim]↳ {msg.content}[/dim]")
                             continue
                         response = msg.content or ""
+                        if _should_wait_for_doctor_followup(message, response):
+                            wait_for_follow_up = True
+                            continue
+                        if wait_for_follow_up:
+                            wait_for_follow_up = False
                         break
             finally:
                 agent_loop.stop()
