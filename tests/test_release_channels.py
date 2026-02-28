@@ -1,3 +1,4 @@
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -63,6 +64,51 @@ def test_ghcr_owner_is_normalized_to_lowercase():
 
     assert "${GITHUB_REPOSITORY_OWNER,,}" in canary_runs
     assert "${GITHUB_REPOSITORY_OWNER,,}" in stable_runs
+
+
+def test_release_publish_jobs_are_gated_by_lint():
+    workflow = _load_yaml(".github/workflows/release.yml")
+    jobs = workflow["jobs"]
+
+    assert "lint" in jobs
+    assert "lint" in jobs["test"]["needs"]
+    assert "lint" in jobs["guard_tag"]["needs"]
+    assert "lint" in jobs["pypi"]["needs"]
+    assert "lint" in jobs["docker_canary"]["needs"]
+    assert "lint" in jobs["docker_stable"]["needs"]
+
+
+def test_canary_channel_has_concurrency_control():
+    workflow = _load_yaml(".github/workflows/release.yml")
+    canary_job = workflow["jobs"]["docker_canary"]
+
+    assert canary_job["concurrency"]["group"] == "release-canary-channel"
+    assert canary_job["concurrency"]["cancel-in-progress"] is True
+
+
+def test_stable_channel_has_concurrency_and_latest_tag_gate():
+    workflow = _load_yaml(".github/workflows/release.yml")
+    stable_job = workflow["jobs"]["docker_stable"]
+
+    assert stable_job["concurrency"]["group"] == "release-stable-channel"
+    assert stable_job["concurrency"]["cancel-in-progress"] is False
+
+    runs = "\n".join(
+        str(step.get("run", ""))
+        for step in stable_job["steps"]
+        if isinstance(step, dict)
+    )
+    assert "git tag --list 'v*' | sort -V | tail -n 1" in runs
+    assert "promote_channel=true" in runs
+    assert "promote_channel=false" in runs
+    assert 'if [[ "${promote_channel}" == "true" ]]; then' in runs
+
+
+def test_dev_dependencies_include_yaml_parser():
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dev_deps = pyproject["project"]["optional-dependencies"]["dev"]
+
+    assert any(dep.lower().startswith("pyyaml") for dep in dev_deps)
 
 
 def test_compose_production_services_are_image_only():
