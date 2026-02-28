@@ -24,4 +24,5 @@ def test_version_fallback_when_metadata_missing(monkeypatch):
     try:
         assert reloaded.__version__ == "0.0.0+local"
     finally:
+        monkeypatch.undo()
         importlib.reload(reloaded)
