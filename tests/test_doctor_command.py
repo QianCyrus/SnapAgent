@@ -69,15 +69,13 @@ async def test_doctor_start_prefers_codex_cli_when_available():
     loop, bus, session = _make_loop()
     loop._doctor_setup_guidance = MagicMock(return_value=None)
     loop._doctor_cli_available = MagicMock(return_value=True)
-    loop._run_doctor_via_codex_cli = AsyncMock(return_value=None)
 
     msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/doctor")
     await loop._handle_doctor(msg)
     await asyncio.sleep(0)
 
     assert session.metadata.get("doctor_mode") is True
-    loop._run_doctor_via_codex_cli.assert_awaited_once()
-    loop._dispatch.assert_not_awaited()
+    loop._dispatch.assert_awaited_once()
     out = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
     assert "doctor mode" in out.content.lower()
 
@@ -146,7 +144,6 @@ async def test_doctor_start_skips_setup_guidance_when_codex_cli_available():
     loop, _bus, session = _make_loop()
     loop._doctor_setup_guidance = MagicMock(return_value="setup guide")
     loop._doctor_cli_available = MagicMock(return_value=True)
-    loop._run_doctor_via_codex_cli = AsyncMock(return_value=None)
 
     msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/doctor")
     await loop._handle_doctor(msg)
@@ -154,8 +151,7 @@ async def test_doctor_start_skips_setup_guidance_when_codex_cli_available():
 
     assert session.metadata.get("doctor_mode") is True
     loop._doctor_setup_guidance.assert_not_called()
-    loop._run_doctor_via_codex_cli.assert_awaited_once()
-    loop._dispatch.assert_not_awaited()
+    loop._dispatch.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -289,10 +285,55 @@ async def test_process_message_doctor_mode_routes_to_codex_cli():
     loop, _bus, session = _make_loop()
     session.metadata["doctor_mode"] = True
     loop._doctor_cli_available = MagicMock(return_value=True)
-    loop._run_doctor_via_codex_cli = AsyncMock(return_value=None)
+    loop._run_doctor_via_codex_cli = AsyncMock(return_value=("diag ok", True))
 
     msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="check logs")
     result = await loop._process_message(msg)
 
-    assert result is None
+    assert result is not None
+    assert result.content == "diag ok"
+    assert result.channel == "test"
+    assert result.chat_id == "c1"
+    loop._run_doctor_via_codex_cli.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_message_doctor_mode_falls_back_to_provider_when_codex_fails():
+    loop, _bus, session = _make_loop()
+    session.metadata["doctor_mode"] = True
+    loop._doctor_cli_available = MagicMock(return_value=True)
+    loop._run_doctor_via_codex_cli = AsyncMock(return_value=("codex failed", False))
+    loop._run_agent_loop = AsyncMock(
+        return_value=(
+            "provider diag",
+            [],
+            [{"role": "assistant", "content": "provider diag"}],
+        )
+    )
+
+    msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="check logs")
+    result = await loop._process_message(msg)
+
+    assert result is not None
+    assert result.content == "provider diag"
+    loop._run_doctor_via_codex_cli.assert_awaited_once()
+    loop._run_agent_loop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_direct_returns_doctor_cli_output_without_empty_fallback():
+    loop, _bus, session = _make_loop()
+    session.metadata["doctor_mode"] = True
+    loop._doctor_cli_available = MagicMock(return_value=True)
+    loop._run_doctor_via_codex_cli = AsyncMock(return_value=("diag via cli", True))
+    loop._connect_mcp = AsyncMock(return_value=None)
+
+    response = await loop.process_direct(
+        "check logs",
+        session_key="test:c1",
+        channel="cli",
+        chat_id="c1",
+    )
+
+    assert response == "diag via cli"
     loop._run_doctor_via_codex_cli.assert_awaited_once()

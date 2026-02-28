@@ -405,28 +405,16 @@ class AgentLoop:
             "Please self-diagnose this session. Collect evidence with doctor_check "
             "(health/status/logs/events) before conclusions."
         )
-        if doctor_cli_available:
-            task = asyncio.create_task(
-                self._run_doctor_via_codex_cli(
-                    msg=msg,
-                    prompt=bootstrap,
-                    run_id=run_id,
-                    turn_id=turn_id,
-                    session_key=key,
-                )
-            )
-        else:
-            logger.warning("Codex CLI unavailable; falling back to provider-based doctor flow")
-            follow_up = InboundMessage(
-                channel=msg.channel,
-                sender_id=msg.sender_id,
-                chat_id=msg.chat_id,
-                content=bootstrap,
-                media=[],
-                metadata=dict(msg.metadata or {}),
-                session_key_override=msg.session_key_override,
-            )
-            task = asyncio.create_task(self._dispatch(follow_up))
+        follow_up = InboundMessage(
+            channel=msg.channel,
+            sender_id=msg.sender_id,
+            chat_id=msg.chat_id,
+            content=bootstrap,
+            media=[],
+            metadata=dict(msg.metadata or {}),
+            session_key_override=msg.session_key_override,
+        )
+        task = asyncio.create_task(self._dispatch(follow_up))
         self._doctor_tasks[key] = task
         self._active_tasks.setdefault(key, []).append(task)
         task.add_done_callback(lambda t, k=key: self._cleanup_task(k, t))
@@ -485,8 +473,13 @@ class AgentLoop:
         run_id: str,
         turn_id: str,
         session_key: str | None = None,
-    ) -> None:
-        """Run doctor diagnostics through Codex CLI and publish final result."""
+        publish: bool = True,
+    ) -> tuple[str, bool]:
+        """Run doctor diagnostics through Codex CLI.
+
+        Returns:
+            (final_message, success)
+        """
         resume_session_id = self._get_doctor_codex_session_id(session_key) if session_key else None
         cmd = self._build_doctor_codex_command(prompt, resume_session_id=resume_session_id)
         proc: asyncio.subprocess.Process | None = None
@@ -499,30 +492,34 @@ class AgentLoop:
                 cwd=str(self.workspace),
             )
         except FileNotFoundError:
-            await self.bus.publish_outbound(
-                OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=(
-                        "🩺 Doctor failed: codex CLI not found on PATH. "
-                        "Please install Codex CLI or use provider-based diagnostics."
-                    ),
-                    run_id=run_id,
-                    turn_id=turn_id,
-                )
+            final = (
+                "🩺 Doctor failed: codex CLI not found on PATH. "
+                "Please install Codex CLI or use provider-based diagnostics."
             )
-            return
+            if publish:
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=final,
+                        run_id=run_id,
+                        turn_id=turn_id,
+                    )
+                )
+            return final, False
         except Exception as e:
-            await self.bus.publish_outbound(
-                OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=f"🩺 Doctor failed to start codex CLI: {e}",
-                    run_id=run_id,
-                    turn_id=turn_id,
+            final = f"🩺 Doctor failed to start codex CLI: {e}"
+            if publish:
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=final,
+                        run_id=run_id,
+                        turn_id=turn_id,
+                    )
                 )
-            )
-            return
+            return final, False
 
         try:
             output, session_id = await self._read_codex_cli_output(proc.stdout)
@@ -542,15 +539,18 @@ class AgentLoop:
                     self._set_doctor_codex_session_id(session_key, session_id)
                 final = f"{final}\n\n(codex session: {session_id})"
 
-            await self.bus.publish_outbound(
-                OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=final,
-                    run_id=run_id,
-                    turn_id=turn_id,
+            success = exit_code == 0
+            if publish:
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=final,
+                        run_id=run_id,
+                        turn_id=turn_id,
+                    )
                 )
-            )
+            return final, success
         except asyncio.CancelledError:
             if proc.returncode is None:
                 proc.terminate()
@@ -560,15 +560,18 @@ class AgentLoop:
                     proc.kill()
             raise
         except Exception as e:
-            await self.bus.publish_outbound(
-                OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=f"🩺 Doctor via Codex CLI errored: {e}",
-                    run_id=run_id,
-                    turn_id=turn_id,
+            final = f"🩺 Doctor via Codex CLI errored: {e}"
+            if publish:
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=final,
+                        run_id=run_id,
+                        turn_id=turn_id,
+                    )
                 )
-            )
+            return final, False
 
     def _get_doctor_codex_session_id(self, session_key: str) -> str | None:
         """Get stored Codex session ID for a doctor-mode chat session."""
@@ -994,14 +997,31 @@ class AgentLoop:
                 + msg.content
             )
             if self._doctor_cli_available():
-                await self._run_doctor_via_codex_cli(
+                codex_final, codex_ok = await self._run_doctor_via_codex_cli(
                     msg=msg,
                     prompt=doctor_prompt,
                     run_id=run_id,
                     turn_id=turn_id,
                     session_key=key,
+                    publish=False,
                 )
-                return None
+                if codex_ok:
+                    return OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=codex_final,
+                        metadata={
+                            **(msg.metadata or {}),
+                            "run_id": run_id,
+                            "turn_id": turn_id,
+                        },
+                        run_id=run_id,
+                        turn_id=turn_id,
+                    )
+                logger.warning(
+                    "Codex CLI doctor run failed; falling back to provider diagnostics for {}",
+                    key,
+                )
 
             msg = InboundMessage(
                 channel=msg.channel,

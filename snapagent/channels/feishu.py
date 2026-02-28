@@ -53,6 +53,8 @@ def _split_message(content: str, max_len: int = FEISHU_CARD_CHUNK_MAX_LEN) -> li
     """Split content into chunks within max_len, preferring paragraph and line breaks."""
     if not content:
         return []
+    if max_len <= 0:
+        raise ValueError("max_len must be greater than 0")
     if len(content) <= max_len:
         return [content]
 

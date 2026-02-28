@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from snapagent.bus.events import OutboundMessage
@@ -28,6 +30,11 @@ def test_split_message_preserves_whitespace_and_newlines():
     assert "".join(chunks) == content
 
 
+def test_split_message_rejects_non_positive_max_len():
+    with pytest.raises(ValueError):
+        _split_message("abc", max_len=0)
+
+
 @pytest.mark.asyncio
 async def test_feishu_send_splits_long_content_into_multiple_cards():
     channel = _make_channel()
@@ -45,3 +52,6 @@ async def test_feishu_send_splits_long_content_into_multiple_cards():
     assert len(calls) == len(chunks)
     assert all(c["msg_type"] == "interactive" for c in calls)
     assert all(len(chunk) <= 2000 for chunk in chunks)
+    for i, call in enumerate(calls):
+        payload = json.loads(call["content"])
+        assert payload["elements"] == [{"tag": "markdown", "content": chunks[i]}]
