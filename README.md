@@ -321,9 +321,18 @@ docker run -v ~/.snapagent:/root/.snapagent -p 18790:18790 snapagent gateway
 
 ### Docker Compose
 
+Prebuilt image channel (`stable` by default):
+
 ```bash
 docker compose run --rm snapagent-cli onboard
 docker compose up -d snapagent-gateway
+```
+
+Local source build (development profile):
+
+```bash
+docker compose --profile build run --rm snapagent-cli-dev onboard
+docker compose --profile build up -d snapagent-gateway-dev
 ```
 
 ### Version Upgrade & Rollback
