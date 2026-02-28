@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from snapagent.cli.commands import app
@@ -199,3 +200,86 @@ def test_status_shows_web_search_fallback_when_no_key(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "SnapAgent Status" in result.stdout
     assert "Web Search: fallback mode" in result.stdout
+
+
+def test_agent_single_message_doctor_waits_for_diagnostic_result(monkeypatch):
+    from snapagent.bus.events import OutboundMessage
+
+    config = Config()
+    monkeypatch.setattr("snapagent.config.loader.load_config", lambda: config)
+    monkeypatch.setattr(
+        "snapagent.cli.commands._make_provider",
+        lambda _config, *, emit_errors=True: object(),
+    )
+
+    class _FakeAgentLoop:
+        def __init__(self, bus, **_kwargs):
+            self.bus = bus
+            self.channels_config = None
+
+        async def run(self):
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel="cli",
+                    chat_id="direct",
+                    content="🩺 Doctor mode ON. Stopped 0 task(s). Running diagnostics...",
+                    metadata={},
+                )
+            )
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel="cli",
+                    chat_id="direct",
+                    content="doctor final diagnosis",
+                    metadata={},
+                )
+            )
+
+        def stop(self):
+            return None
+
+        async def close_mcp(self):
+            return None
+
+    monkeypatch.setattr("snapagent.agent.loop.AgentLoop", _FakeAgentLoop)
+
+    result = runner.invoke(app, ["agent", "-m", "/doctor", "--no-markdown"])
+
+    assert result.exit_code == 0
+    assert "doctor final diagnosis" in result.stdout
+
+
+def test_build_agent_provider_falls_back_for_doctor_command(monkeypatch):
+    from snapagent.cli import commands
+
+    config = Config()
+    fallback = object()
+    emit_flags: list[bool] = []
+
+    def _raise_exit(_config, *, emit_errors=True):
+        emit_flags.append(emit_errors)
+        raise typer.Exit(1)
+
+    monkeypatch.setattr(commands, "_make_provider", _raise_exit)
+    monkeypatch.setattr(commands, "_make_unconfigured_provider", lambda _config: fallback)
+
+    provider = commands._build_agent_provider(config, "/doctor")
+    assert provider is fallback
+    assert emit_flags == [False]
+
+
+def test_build_agent_provider_keeps_fail_fast_for_non_doctor(monkeypatch):
+    from snapagent.cli import commands
+
+    config = Config()
+    emit_flags: list[bool] = []
+
+    def _raise_exit(_config, *, emit_errors=True):
+        emit_flags.append(emit_errors)
+        raise typer.Exit(1)
+
+    monkeypatch.setattr(commands, "_make_provider", _raise_exit)
+
+    with pytest.raises(typer.Exit):
+        commands._build_agent_provider(config, "hello")
+    assert emit_flags == [True]

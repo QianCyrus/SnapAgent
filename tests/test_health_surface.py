@@ -109,6 +109,26 @@ def test_collect_health_snapshot_vllm_requires_auth(tmp_path, monkeypatch):
     assert provider.details["has_auth"] is False
 
 
+def test_collect_health_snapshot_oauth_provider_requires_credentials(tmp_path, monkeypatch):
+    config, _ = _build_config(tmp_path, with_provider_key=False)
+    config.agents.defaults.provider = "openai_codex"
+    config.agents.defaults.model = "openai-codex/gpt-5.1-codex"
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "snapagent.observability.health._resolve_oauth_provider_auth",
+        lambda provider_name: (False, "oauth:missing"),
+    )
+
+    snapshot = collect_health_snapshot(config=config, config_path=config_path)
+
+    provider = next(e for e in snapshot.evidence if e.component == "provider")
+    assert provider.status == "failed"
+    assert provider.details["has_auth"] is False
+    assert snapshot.readiness == "failed"
+
+
 def test_collect_health_snapshot_degraded_with_queue_backlog(tmp_path):
     config, _ = _build_config(tmp_path, with_provider_key=True)
     config_path = tmp_path / "config.json"
