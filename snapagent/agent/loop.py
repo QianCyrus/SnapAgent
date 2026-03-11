@@ -22,6 +22,7 @@ from snapagent.agent.tools.cron import CronTool
 from snapagent.agent.tools.doctor import DoctorCheckTool
 from snapagent.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from snapagent.agent.tools.message import MessageTool
+from snapagent.agent.tools.pdf import PdfReaderTool
 from snapagent.agent.tools.rag import RagQueryTool
 from snapagent.agent.tools.registry import ToolRegistry
 from snapagent.agent.tools.shell import ExecTool
@@ -163,6 +164,12 @@ class AgentLoop:
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
+        try:
+            import fitz
+
+            self.tools.register(PdfReaderTool(workspace=self.workspace, allowed_dir=allowed_dir))
+        except ImportError:
+            pass
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -233,6 +240,7 @@ class AgentLoop:
         session_key: str | None = None,
     ) -> tuple[str | None, list[str], list[dict]]:
         """Run one orchestrated turn. Returns (final_content, tools_used, messages)."""
+
         async def _inject_event(messages: list[dict]) -> bool:
             if not session_key:
                 return False
@@ -243,7 +251,7 @@ class AgentLoop:
             messages.append(
                 {
                     "role": "system",
-                    "content": f"<SYS_EVENT type=\"user_interrupt\">{event}</SYS_EVENT>",
+                    "content": f'<SYS_EVENT type="user_interrupt">{event}</SYS_EVENT>',
                 }
             )
             if flattened_event:
@@ -379,8 +387,7 @@ class AgentLoop:
                     channel=msg.channel,
                     chat_id=msg.chat_id,
                     content=(
-                        f"🩺 Doctor precheck blocked (stopped {total} task(s)).\n\n"
-                        f"{guidance}"
+                        f"🩺 Doctor precheck blocked (stopped {total} task(s)).\n\n{guidance}"
                     ),
                     run_id=run_id,
                     turn_id=turn_id,
@@ -533,7 +540,9 @@ class AgentLoop:
                 stderr_text = (await stderr_task).decode("utf-8", "replace").strip()
 
             if exit_code == 0:
-                final = output or "Doctor completed via Codex CLI, but no final message was captured."
+                final = (
+                    output or "Doctor completed via Codex CLI, but no final message was captured."
+                )
             else:
                 detail = stderr_text or output or f"exited with code {exit_code}"
                 final = f"🩺 Doctor via Codex CLI failed: {detail}"
@@ -692,9 +701,15 @@ class AgentLoop:
         try:
             config_path = get_config_path()
             config = load_config()
-            snapshot = collect_health_snapshot(config=config, config_path=config_path).to_dict(deep=True)
+            snapshot = collect_health_snapshot(config=config, config_path=config_path).to_dict(
+                deep=True
+            )
             provider = next(
-                (item for item in snapshot.get("evidence", []) if item.get("component") == "provider"),
+                (
+                    item
+                    for item in snapshot.get("evidence", [])
+                    if item.get("component") == "provider"
+                ),
                 None,
             )
             if not provider:
@@ -972,8 +987,7 @@ class AgentLoop:
                 channel=msg.channel,
                 chat_id=msg.chat_id,
                 content=(
-                    "\u26a1 Normal mode — I'll execute tools directly.\n"
-                    "Use /plan to switch back."
+                    "\u26a1 Normal mode — I'll execute tools directly.\nUse /plan to switch back."
                 ),
                 run_id=run_id,
                 turn_id=turn_id,
@@ -1001,8 +1015,7 @@ class AgentLoop:
             doctor_prompt = (
                 "[Doctor Mode] Diagnose issues using evidence first. "
                 "Use doctor_check with check=health/status/logs/events as needed. "
-                "Cite observed evidence and then propose next actions.\n\n"
-                + msg.content
+                "Cite observed evidence and then propose next actions.\n\n" + msg.content
             )
             if self._doctor_cli_available():
                 codex_final, codex_ok = await self._run_doctor_via_codex_cli(
